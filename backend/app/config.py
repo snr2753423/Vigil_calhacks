@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     sim_backfill_max_hours: float = 48.0  # on startup, fill at most this much of a gap since the last row
     r120_resting_hr: float | None = None  # presenter's measured resting HR, used for R-120's seeded history
 
+    # Fast-tier evaluator (SPEC §7a)
+    evaluator_enabled: bool = True
+    eval_interval_s: float = 2.0
+    snapshot_interval_s: float = 10.0  # full priority_snapshots write cadence (tier changes are written at once)
+
     # Live WebSocket
     heartbeat_interval_s: float = 2.0
 

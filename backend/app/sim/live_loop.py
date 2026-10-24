@@ -18,6 +18,7 @@ from app.config import Settings, get_settings
 from app.db import tiger
 from app.sim import cast
 from app.sim import facility as fac
+from app.sim.injectors import Injected, InjectError
 from app.sim.physiology import ResidentSim, SimBatch
 from app.state import sim_state
 
@@ -77,6 +78,29 @@ class LiveLoop:
     def active_ids(self) -> list[int]:
         return [rid for rid in self.sims if rid != fac.LIVE_RESIDENT_ID or sim_state.simulated_band]
 
+    def inject(self, scenario: Injected) -> None:
+        """Add an injected scenario to a live resident (dropping their expired injections)."""
+        sim = self.sims.get(scenario.resident_id)
+        if sim is None:
+            raise InjectError(404, f"no simulated resident {scenario.resident_id}")
+        if scenario.resident_id not in self.active_ids():
+            raise InjectError(
+                409, f"R-{scenario.resident_id} streams from real devices; turn on the simulated band first"
+            )
+        now = time.time()
+        kept = [s for s in sim.scenarios if not (isinstance(s, Injected) and s.end < now)]
+        sim.scenarios = [*kept, scenario]  # rebind, so a step running in the worker thread keeps its list
+        log.info("live: injected %s for R-%d until %s", scenario.kind, scenario.resident_id, fac.utc_iso(scenario.end))
+
+    def injections(self) -> list[dict]:
+        now = time.time()
+        return [
+            s.describe()
+            for sim in self.sims.values()
+            for s in sim.scenarios
+            if isinstance(s, Injected) and s.end >= now
+        ]
+
     async def _prepare(self, conn: psycopg.AsyncConnection) -> None:
         seeded = await tiger.get_meta(conn, "seed") or {}
         night = (await tiger.get_meta(conn, "scripted_night") or {}).get("date")
@@ -121,6 +145,8 @@ class LiveLoop:
                 log.warning("live: TIGER_DATABASE_URL not set — live simulator disabled")
                 return
             except Exception as exc:  # keep going: reconnect and backfill whatever was missed
+                if tiger.cancelling():  # psycopg can turn a cancel mid-COPY into QueryCanceled: still a cancel
+                    raise asyncio.CancelledError from exc
                 self.stats.phase = "error"
                 self.stats.last_error = " ".join(str(exc).split())[:200]
                 log.warning("live: %s — retrying in %.0f s", self.stats.last_error, backoff)

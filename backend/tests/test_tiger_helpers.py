@@ -32,7 +32,7 @@ def test_split_sql_respects_strings_comments_and_dollar_quotes() -> None:
 
 def test_migration_files_split_into_statements() -> None:
     files = {p.name: tiger.split_sql(p.read_text()) for p in tiger.migration_files()}
-    assert list(files) == ["001_schema.sql", "002_caggs.sql", "003_policies.sql", "004_jobs.sql"]
+    assert list(files) == ["001_schema.sql", "002_caggs.sql", "003_policies.sql", "004_jobs.sql", "005_scoring.sql"]
     assert len(files["002_caggs.sql"]) == 3
     assert len(files["004_jobs.sql"]) == 4  # function, job procedure, add_job block, re-enable paused jobs
     assert all(s.strip() for stmts in files.values() for s in stmts)

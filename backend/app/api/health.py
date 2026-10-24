@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app import __version__
 from app.config import get_settings
+from app.scoring import evaluator
 from app.sim import live_loop
 from app.state import sim_state
 from app.ws.hub import hub, utc_now_iso
@@ -20,6 +21,7 @@ async def health() -> dict:
         "ws_clients": hub.client_count,
         "sim": sim_state.to_dict(),
         "live_sim": live_loop.live.stats.to_dict() if live_loop.live else None,
+        "evaluator": evaluator.evaluator.stats.to_dict() if evaluator.evaluator else None,
         "configured": {
             "tiger": settings.tiger_configured,
             "snowflake": settings.snowflake_configured,

@@ -18,9 +18,12 @@ from typing import Any
 
 import numpy as np
 import psycopg
+from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from psycopg_pool import AsyncConnectionPool
 
 from app.config import BACKEND_DIR, get_settings
+from app.scoring.rules import FALL_IMPACT_G
 
 CONNECT_TIMEOUT_S = 10
 MIGRATIONS_DIR = BACKEND_DIR / "sql" / "tiger"
@@ -28,6 +31,17 @@ MIGRATIONS_DIR = BACKEND_DIR / "sql" / "tiger"
 
 class TigerNotConfigured(RuntimeError):
     pass
+
+
+def cancelling() -> bool:
+    """True while the current task is being cancelled.
+
+    A cancel that lands mid-COPY can surface as psycopg's QueryCanceled (the COPY is failed with the
+    CancelledError as reason), so a reconnect-on-error loop must check this before swallowing an error,
+    or the task survives shutdown and blocks uvicorn's reload.
+    """
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() > 0
 
 
 @asynccontextmanager
@@ -347,3 +361,294 @@ async def set_meta(conn: psycopg.AsyncConnection, key: str, value: dict, merge: 
             ON CONFLICT (key) DO UPDATE SET value = {update}, updated_at = now()""",
         (key, Jsonb(value)),
     )
+
+
+# --------------------------------------------------------------------------- API connection pool
+
+_pool: AsyncConnectionPool | None = None
+POOL_TIMEOUT_S = 10
+
+
+async def open_pool(min_size: int = 1, max_size: int = 6) -> AsyncConnectionPool:
+    """Shared pool for API requests (a fresh TLS connection to Tiger Cloud costs ~0.5 s)."""
+    global _pool
+    if _pool is None:
+        url = get_settings().tiger_database_url
+        if not url:
+            raise TigerNotConfigured("TIGER_DATABASE_URL is not set in .env")
+        pool = AsyncConnectionPool(
+            url,
+            min_size=min_size,
+            max_size=max_size,
+            kwargs={"autocommit": True, "connect_timeout": CONNECT_TIMEOUT_S, "application_name": "vigil-api"},
+            open=False,
+        )
+        await pool.open(wait=False)
+        _pool = pool
+    return _pool
+
+
+async def close_pool() -> None:
+    global _pool
+    if _pool is not None:
+        pool, _pool = _pool, None
+        await pool.close()
+
+
+@asynccontextmanager
+async def pooled() -> AsyncIterator[psycopg.AsyncConnection]:
+    pool = await open_pool()
+    async with pool.connection(timeout=POOL_TIMEOUT_S) as conn:
+        yield conn
+
+
+async def fetch_dicts(conn: psycopg.AsyncConnection, sql: str, params: Sequence[Any] | Mapping[str, Any] | None = None):
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(sql, params)
+        return await cur.fetchall()
+
+
+# --------------------------------------------------------------------------- fast-tier scoring inputs
+# One batched read for all residents as of `as_of` (SPEC §7a). The queries go out in a single pipeline,
+# so the evaluator pays one network round trip per cycle. Every bound is relative to %(as_of)s.
+
+
+SCORING_QUERIES: dict[str, str] = {
+    # Raw vitals, trailing 15 min: liveness, latest state, rule windows, NEWS2 averages.
+    "raw": """
+        WITH w AS (
+            SELECT ts, resident_id, hr, rr, spo2, worn, in_bed
+            FROM vitals
+            WHERE ts > %(as_of)s - INTERVAL '15 minutes' AND ts <= %(as_of)s
+        )
+        SELECT resident_id,
+               max(ts)  AS last_ts,
+               count(*) AS n,
+               live_at(heartbeat_agg(ts, %(as_of)s - INTERVAL '15 minutes', INTERVAL '15 minutes 1 second',
+                                     INTERVAL '5 minutes'), %(as_of)s) AS heartbeat_live,
+               (array_agg(worn ORDER BY ts DESC) FILTER (WHERE worn IS NOT NULL))[1]     AS worn,
+               (array_agg(in_bed ORDER BY ts DESC) FILTER (WHERE in_bed IS NOT NULL))[1] AS in_bed,
+               max(ts) FILTER (WHERE worn)              AS last_worn_ts,
+               max(ts) FILTER (WHERE hr IS NOT NULL)    AS last_hr_ts,
+               avg(hr) FILTER (WHERE ts > %(as_of)s - INTERVAL '5 minutes') AS hr_5m,
+               avg(rr) FILTER (WHERE ts > %(as_of)s - INTERVAL '5 minutes') AS rr_5m,
+               (array_agg(spo2 ORDER BY ts DESC) FILTER (WHERE spo2 IS NOT NULL))[1:2] AS spo2_recent,
+               count(*) FILTER (WHERE ts > %(as_of)s - INTERVAL '65 seconds' AND worn AND hr IS NOT NULL) AS hr60_n,
+               min(hr)  FILTER (WHERE ts > %(as_of)s - INTERVAL '65 seconds' AND worn) AS hr60_lo,
+               max(hr)  FILTER (WHERE ts > %(as_of)s - INTERVAL '65 seconds' AND worn) AS hr60_hi,
+               extract(epoch FROM max(ts) FILTER (WHERE ts > %(as_of)s - INTERVAL '65 seconds' AND worn AND hr IS NOT NULL)
+                                - min(ts) FILTER (WHERE ts > %(as_of)s - INTERVAL '65 seconds' AND worn AND hr IS NOT NULL)
+               )::float AS hr60_span,
+               count(*) FILTER (WHERE ts > %(as_of)s - INTERVAL '125 seconds' AND in_bed AND rr IS NOT NULL) AS rr120_n,
+               min(rr)  FILTER (WHERE ts > %(as_of)s - INTERVAL '125 seconds' AND in_bed) AS rr120_lo,
+               max(rr)  FILTER (WHERE ts > %(as_of)s - INTERVAL '125 seconds' AND in_bed) AS rr120_hi,
+               extract(epoch FROM max(ts) FILTER (WHERE ts > %(as_of)s - INTERVAL '125 seconds' AND in_bed AND rr IS NOT NULL)
+                                - min(ts) FILTER (WHERE ts > %(as_of)s - INTERVAL '125 seconds' AND in_bed AND rr IS NOT NULL)
+               )::float AS rr120_span
+        FROM w
+        GROUP BY resident_id
+    """,
+    # Newest impact spike within 2 h (partial index vitals_impact_idx), what followed it. The threshold is
+    # interpolated as a literal so the planner can use the partial index.
+    "impact": f"""
+        WITH imp AS (
+            SELECT DISTINCT ON (resident_id) resident_id, ts, impact
+            FROM vitals
+            WHERE impact >= {float(FALL_IMPACT_G)} AND ts > %(as_of)s - INTERVAL '2 hours' AND ts <= %(as_of)s
+            ORDER BY resident_id, ts DESC
+        )
+        SELECT imp.resident_id, imp.ts, imp.impact, a.motion_after, a.rows_after, b.back_in_bed
+        FROM imp
+        CROSS JOIN LATERAL (
+            SELECT max(v.motion) AS motion_after, count(*) AS rows_after
+            FROM vitals v
+            WHERE v.resident_id = imp.resident_id AND v.ts > imp.ts
+              AND v.ts <= least(imp.ts + INTERVAL '30 seconds', %(as_of)s)
+        ) a
+        CROSS JOIN LATERAL (
+            SELECT coalesce(bool_or(v.in_bed), false) AS back_in_bed
+            FROM vitals v
+            WHERE v.resident_id = imp.resident_id AND v.ts > imp.ts AND v.ts <= %(as_of)s
+        ) b
+    """,
+    # Closed 1-minute buckets, trailing 6 h: two 15-min windows vs baseline, stillness, HR sparkline.
+    "minute": """
+        WITH m AS (
+            SELECT bucket, resident_id, hr_avg, rr_avg, spo2_min, skin_temp_avg, motion_sum, in_bed_frac, worn_frac,
+                   -- first minute after a data gap (restart, network): stillness can't be inferred across it
+                   bucket - lag(bucket) OVER (PARTITION BY resident_id ORDER BY bucket) > INTERVAL '1 minute'
+                       AS after_gap
+            FROM vitals_1m
+            WHERE bucket > %(as_of)s - INTERVAL '6 hours' AND bucket <= %(as_of)s - INTERVAL '1 minute'
+        ), agg AS (
+            SELECT resident_id,
+                   avg(hr_avg)        FILTER (WHERE bucket > %(as_of)s - INTERVAL '16 minutes') AS hr_w0,
+                   avg(rr_avg)        FILTER (WHERE bucket > %(as_of)s - INTERVAL '16 minutes') AS rr_w0,
+                   avg(spo2_min)      FILTER (WHERE bucket > %(as_of)s - INTERVAL '16 minutes') AS spo2_w0,
+                   avg(skin_temp_avg) FILTER (WHERE bucket > %(as_of)s - INTERVAL '16 minutes') AS skin_temp_w0,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY motion_sum)
+                                      FILTER (WHERE bucket > %(as_of)s - INTERVAL '16 minutes') AS motion_w0,
+                   avg(in_bed_frac)   FILTER (WHERE bucket > %(as_of)s - INTERVAL '16 minutes') AS in_bed_w0,
+                   avg(hr_avg)        FILTER (WHERE bucket > %(as_of)s - INTERVAL '31 minutes'
+                                                AND bucket <= %(as_of)s - INTERVAL '16 minutes') AS hr_w1,
+                   avg(rr_avg)        FILTER (WHERE bucket > %(as_of)s - INTERVAL '31 minutes'
+                                                AND bucket <= %(as_of)s - INTERVAL '16 minutes') AS rr_w1,
+                   avg(spo2_min)      FILTER (WHERE bucket > %(as_of)s - INTERVAL '31 minutes'
+                                                AND bucket <= %(as_of)s - INTERVAL '16 minutes') AS spo2_w1,
+                   avg(skin_temp_avg) FILTER (WHERE bucket > %(as_of)s - INTERVAL '31 minutes'
+                                                AND bucket <= %(as_of)s - INTERVAL '16 minutes') AS skin_temp_w1,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY motion_sum)
+                                      FILTER (WHERE bucket > %(as_of)s - INTERVAL '31 minutes'
+                                                AND bucket <= %(as_of)s - INTERVAL '16 minutes') AS motion_w1,
+                   avg(in_bed_frac)   FILTER (WHERE bucket > %(as_of)s - INTERVAL '31 minutes'
+                                                AND bucket <= %(as_of)s - INTERVAL '16 minutes') AS in_bed_w1,
+                   -- minutes of observed stillness: from the last minute with wrist motion (band-off minutes
+                   -- and data gaps reset the clock) to the newest minute with data (a trailing gap adds nothing)
+                   extract(epoch FROM max(bucket) + INTERVAL '1 minute' - greatest(
+                       max(bucket) FILTER (WHERE motion_sum >= %(still_motion)s OR motion_sum IS NULL
+                                                 OR worn_frac < 0.5) + INTERVAL '1 minute',
+                       max(bucket) FILTER (WHERE after_gap),
+                       min(bucket)))::float / 60 AS still_minutes
+            FROM m
+            GROUP BY resident_id
+        ), spark AS (
+            SELECT resident_id, array_agg(hr ORDER BY b) AS hr_spark
+            FROM (SELECT resident_id, time_bucket(INTERVAL '5 minutes', bucket) AS b, avg(hr_avg)::real AS hr
+                  FROM m WHERE bucket > %(as_of)s - INTERVAL '2 hours'
+                  GROUP BY 1, 2) s
+            GROUP BY resident_id
+        )
+        SELECT agg.*, spark.hr_spark FROM agg LEFT JOIN spark USING (resident_id)
+    """,
+    # Staff and bed events, trailing 24 h.
+    "events": """
+        SELECT resident_id,
+               max(ts) FILTER (WHERE type = 'check_logged') AS last_check,
+               max(ts) FILTER (WHERE type = 'bed_exit')     AS last_exit,
+               max(ts) FILTER (WHERE type = 'bed_return')   AS last_return,
+               count(*) FILTER (WHERE type = 'bed_exit' AND ts >= %(night_start)s::timestamptz) AS exits_tonight,
+               (array_agg(payload ORDER BY ts DESC)
+                   FILTER (WHERE type = 'spot_check' AND ts > %(as_of)s - INTERVAL '12 hours'))[1] AS spot,
+               max(ts) FILTER (WHERE type = 'spot_check' AND ts > %(as_of)s - INTERVAL '12 hours') AS spot_ts,
+               (array_agg(payload ORDER BY ts DESC)
+                   FILTER (WHERE type = 'note_added' AND ts > %(as_of)s - INTERVAL '12 hours'))[1] AS note,
+               max(ts) FILTER (WHERE type = 'note_added' AND ts > %(as_of)s - INTERVAL '12 hours') AS note_ts
+        FROM events
+        WHERE ts > %(as_of)s - INTERVAL '24 hours' AND ts <= %(as_of)s
+        GROUP BY resident_id
+    """,
+    # Snowflake note extractions mirrored to Tiger (Phase 6); empty until then.
+    "note_extract": """
+        SELECT DISTINCT ON (resident_id) resident_id, as_of, payload
+        FROM ai_insights
+        WHERE kind = 'note_extract' AND as_of > %(as_of)s - INTERVAL '12 hours' AND as_of <= %(as_of)s
+        ORDER BY resident_id, as_of DESC
+    """,
+}
+
+
+async def load_scoring_rows(
+    conn: psycopg.AsyncConnection, as_of: datetime, night_start: datetime | None, still_motion: float
+) -> dict[str, list[dict]]:
+    params = {"as_of": as_of, "night_start": night_start, "still_motion": still_motion}
+    cursors = {}
+    async with conn.pipeline():
+        for name, sql in SCORING_QUERIES.items():
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(sql, params)
+            cursors[name] = cur
+    out = {}
+    for name, cur in cursors.items():
+        out[name] = await cur.fetchall()
+        await cur.close()
+    return out
+
+
+async def load_profiles(conn: psycopg.AsyncConnection) -> list[dict]:
+    return await fetch_dicts(
+        conn,
+        """SELECT resident_id, name, sex, room, unit, mobility, morse, cognition, code_status, flags, is_live
+           FROM residents ORDER BY resident_id""",
+    )
+
+
+async def load_baseline_rows(conn: psycopg.AsyncConnection) -> list[tuple]:
+    return await fetchall(
+        conn, "SELECT resident_id, tod_block, metric, p05, p50, p95, mean, stddev FROM resident_baselines"
+    )
+
+
+SNAPSHOT_COLUMNS = ("ts", "resident_id", "score", "tier", "components", "factors")
+
+
+async def write_snapshots(conn: psycopg.AsyncConnection, rows: Iterable[Sequence]) -> int:
+    """(ts, resident_id, score, tier, components dict, factors list) → priority_snapshots."""
+    return await copy_rows(
+        conn,
+        "priority_snapshots",
+        SNAPSHOT_COLUMNS,
+        ((ts, rid, s, t, Jsonb(c), Jsonb(f)) for ts, rid, s, t, c, f in rows),
+    )
+
+
+async def latest_snapshots(conn: psycopg.AsyncConnection, as_of: datetime, lookback_s: float = 600) -> list[dict]:
+    return await fetch_dicts(
+        conn,
+        """SELECT DISTINCT ON (resident_id) resident_id, ts, score, tier, factors
+           FROM priority_snapshots
+           WHERE ts > %(as_of)s - make_interval(secs => %(lookback)s) AND ts <= %(as_of)s
+           ORDER BY resident_id, ts DESC""",
+        {"as_of": as_of, "lookback": lookback_s},
+    )
+
+
+async def snapshot_scores_before(conn: psycopg.AsyncConnection, points: Mapping[int, datetime]) -> dict[int, float]:
+    """Score recorded just before each (resident, time), within 5 min — e.g. the score when a check was logged."""
+    if not points:
+        return {}
+    rows = await fetchall(
+        conn,
+        """SELECT DISTINCT ON (c.rid) c.rid, s.score
+           FROM unnest(%s::int[], %s::timestamptz[]) AS c (rid, ts)
+           JOIN priority_snapshots s ON s.resident_id = c.rid AND s.ts <= c.ts AND s.ts > c.ts - INTERVAL '5 minutes'
+           ORDER BY c.rid, s.ts DESC""",
+        (list(points), list(points.values())),
+    )
+    return {rid: float(score) for rid, score in rows}
+
+
+# --------------------------------------------------------------------------- charts
+
+# metric → (aggregate expression over the cagg, carry forward across missing buckets)
+SERIES_METRICS: dict[str, tuple[str, bool]] = {
+    "hr": ("avg(hr_avg)", True),
+    "hr_min": ("min(hr_min)", True),
+    "hr_max": ("max(hr_max)", True),
+    "rr": ("avg(rr_avg)", True),
+    "spo2": ("min(spo2_min)", True),
+    "skin_temp": ("avg(skin_temp_avg)", True),
+    "hrv": ("avg(hrv_avg)", True),
+    "motion": ("sum(motion_sum)", False),
+    "in_bed": ("avg(in_bed_frac)", False),
+    "bed_motion": ("avg(bed_motion_avg)", False),
+    "worn": ("avg(worn_frac)", False),
+}
+SERIES_RES = {"1m": ("vitals_1m", "1 minute"), "15m": ("vitals_15m", "15 minutes"), "1h": ("vitals_1h", "1 hour")}
+
+
+async def vitals_series(
+    conn: psycopg.AsyncConnection, resident_id: int, metrics: Sequence[str], start: datetime, end: datetime, res: str
+) -> list[dict]:
+    """Gap-filled chart series from a continuous aggregate (time_bucket_gapfill + locf)."""
+    table, step = SERIES_RES[res]
+    cols = []
+    for m in metrics:
+        expr, carry = SERIES_METRICS[m]
+        cols.append(f"locf({expr}::real) AS {m}" if carry else f"{expr}::real AS {m}")  # locf must be top level
+    sql = f"""
+        SELECT time_bucket_gapfill(INTERVAL '{step}', bucket, %(start)s, %(end)s) AS ts, {", ".join(cols)}
+        FROM {table}
+        WHERE resident_id = %(rid)s AND bucket >= %(start)s AND bucket < %(end)s
+        GROUP BY 1 ORDER BY 1
+    """  # table/step/expressions come from the constant maps above
+    return await fetch_dicts(conn, sql, {"rid": resident_id, "start": start, "end": end})

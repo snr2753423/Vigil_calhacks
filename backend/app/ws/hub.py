@@ -1,6 +1,7 @@
 """WebSocket hub for `/ws/live` (server → client: queue, readings, alerts, insights, sim state).
 
-Phase 1: connection registry plus a heartbeat broadcast every `heartbeat_interval_s`.
+Connection registry, a heartbeat every `heartbeat_interval_s`, and the evaluator's `queue` (when a card
+changes, else every 10 s; also sent to new clients right after `hello`) and `alert` messages.
 """
 
 import asyncio
@@ -26,6 +27,7 @@ def utc_now_iso() -> str:
 class Hub:
     def __init__(self) -> None:
         self._clients: set[WebSocket] = set()
+        self.last_queue: dict[str, Any] | None = None  # sent to clients as soon as they connect
 
     @property
     def client_count(self) -> int:
@@ -50,6 +52,12 @@ class Hub:
         for ws, result in zip(clients, results, strict=True):
             if isinstance(result, BaseException):
                 await self._drop(ws)
+
+    async def publish_queue(self, message: dict[str, Any], *, broadcast: bool = True) -> None:
+        """Keep the latest queue for clients that connect later; send it now only if `broadcast`."""
+        self.last_queue = message
+        if broadcast:
+            await self.broadcast(message)
 
     async def _drop(self, ws: WebSocket) -> None:
         """Forget the client and close its socket so the browser notices and reconnects."""
@@ -97,6 +105,8 @@ async def ws_live(ws: WebSocket) -> None:
                 "sim": sim_state.to_dict(),
             }
         )
+        if hub.last_queue is not None:
+            await ws.send_json(hub.last_queue)
         while True:  # client → server messages are ignored for now
             await ws.receive_text()
     except (WebSocketDisconnect, RuntimeError):  # RuntimeError: the hub already closed this socket
