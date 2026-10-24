@@ -10,7 +10,7 @@ import { FactorChip } from "@/components/factor-chip";
 import { MarkCheckedForm } from "@/components/mark-checked-form";
 import { Sparkline } from "@/components/queue/sparkline";
 import { TierChip } from "@/components/tier-chip";
-import { formatMinutes } from "@/lib/format";
+import { facilityHHMM, formatMinutes } from "@/lib/format";
 import type { QueueRow } from "@/lib/queue";
 import { TIERS } from "@/lib/tiers";
 
@@ -98,10 +98,24 @@ export const ResidentCard = memo(function ResidentCard({ row, minutesSinceCheck 
         )}
       </div>
 
-      <p className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
-        <Sparkles className="size-4 shrink-0" aria-hidden />
-        <span>AI summary pending · Snowflake Cortex</span>
-      </p>
+      {row.ai ? (
+        <p className="mt-3 flex items-start gap-2 text-base">
+          <Sparkles className="mt-1 size-4 shrink-0 text-indigo-200" aria-hidden />
+          <span>
+            <span className="text-indigo-50">{row.ai.text}</span>{" "}
+            <span className="whitespace-nowrap text-sm text-muted-foreground">
+              · Snowflake Cortex · {facilityHHMM(Date.parse(row.ai.at))}
+            </span>
+          </span>
+        </p>
+      ) : (
+        (row.tier === "HIGH" || row.tier === "CRITICAL") && (
+          <p className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
+            <Sparkles className="size-4 shrink-0" aria-hidden />
+            <span>AI summary pending · Snowflake Cortex</span>
+          </p>
+        )
+      )}
 
       <footer className="mt-3 flex flex-wrap items-start gap-2">
         <Link

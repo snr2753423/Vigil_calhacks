@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import TigerConn, facility_tz, parse_ts
 from app.db import tiger
-from app.deep.assess import template_assessment
+from app.deep.assess import get_assessor, template_assessment
 from app.scoring import evaluator as ev
 from app.scoring.baseline import Baselines, tod_block
 
@@ -17,15 +17,13 @@ MAX_POINTS = 20_000
 RES_STEP = {"1m": timedelta(minutes=1), "15m": timedelta(minutes=15), "1h": timedelta(hours=1)}
 
 
-def _current(rid: int) -> dict | None:
-    """This resident's entry in the live evaluator's latest queue."""
-    live = ev.evaluator
-    if live is None or live.latest is None:
-        return None
-    for rank, it in enumerate(live.latest.items, start=1):
-        if it.profile.resident_id == rid:
-            return it.to_dict(rank)
-    return None
+async def assessment_for(conn, resident: dict, current: dict | None, at: datetime, *, live: bool) -> dict:
+    """The AI card: the newest Snowflake Cortex assessment (≤ 60 min old, known by `at`), else the template."""
+    rid = resident["resident_id"]
+    assessor = get_assessor()
+    cached = await assessor.cached(conn, rid, at, live=live)
+    card = cached or template_assessment(resident, current) | {"as_of": at.isoformat()}
+    return card | {"pending": assessor.pending(rid, None if live else at)}
 
 
 @router.get("")
@@ -37,7 +35,7 @@ async def list_residents(conn: TigerConn) -> list[dict]:
            FROM residents ORDER BY resident_id""",
     )
     for r in rows:
-        cur = _current(r["resident_id"])
+        cur = ev.live_card(r["resident_id"])
         r["current"] = None if cur is None else {k: cur[k] for k in ("rank", "score", "tier", "factors", "rule")}
     return rows
 
@@ -57,12 +55,7 @@ async def get_resident(resident_id: int, conn: TigerConn, as_of: str | None = No
     if baselines is None:
         baselines = Baselines(await tiger.load_baseline_rows(conn))
     behavior = baselines.behavior_for(resident_id)
-    current = _current(resident_id) if ts is None else None
-    if current is None:  # historical as_of, or the evaluator isn't running: score the facility once
-        queue = await ev.evaluate_at(conn, at, facility_tz(), live.ctx if live else None, live=ts is None)
-        current = next(
-            (it.to_dict(i) for i, it in enumerate(queue.items, 1) if it.profile.resident_id == resident_id), None
-        )
+    current = await ev.current_for(conn, resident_id, at, live=ts is None)
     events = await tiger.fetch_dicts(
         conn,
         """SELECT ts, type, staff_id, payload FROM events
@@ -80,7 +73,7 @@ async def get_resident(resident_id: int, conn: TigerConn, as_of: str | None = No
             "still_minutes_p95": behavior.still_minutes_p95,
         },
         "current": current,
-        "assessment": template_assessment(resident, current),  # Phase 6: Cortex, with this as the fallback
+        "assessment": await assessment_for(conn, resident, current, at, live=ts is None),
         "events": events,
     }
 

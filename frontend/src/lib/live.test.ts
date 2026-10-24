@@ -82,6 +82,17 @@ describe("applyMessage", () => {
     }
     expect(state.intervalsMs).toHaveLength(MAX_INTERVALS);
   });
+
+  it("keeps the newest Cortex insight so the resident page can reload", () => {
+    const raw = JSON.stringify({
+      type: "insight", kind: "assessment", resident_id: 17, as_of: "2026-10-17T09:14:00Z", live: true,
+      headline: "Check Rosa now", model: "claude-sonnet-5",
+    });
+    const msg = parseLiveMessage(raw);
+    expect(msg?.type).toBe("insight");
+    const state = { ...initialLiveState, ...applyMessage(initialLiveState, msg!, 1) };
+    expect(state.lastInsight?.resident_id).toBe(17);
+  });
 });
 
 describe("formatFacilityClock", () => {

@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     anomaly_train_days: float = 12.0
     snowflake_train_warehouse: str | None = None  # optional bigger warehouse for `make train` only
 
+    # Deep tier: Cortex AI assessment (SPEC §9 ⑤): automatic triggers; Refresh works whenever Snowflake is set
+    assess_enabled: bool = True
+
     # Live WebSocket
     heartbeat_interval_s: float = 2.0
 

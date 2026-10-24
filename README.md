@@ -80,6 +80,7 @@ Compose reads `.env` and mounts `./secrets` read-only into the backend. The `Cad
 | `make sf-load` | Re-run the Snowflake bulk load alone (empties `VIGIL.CORE` first) |
 | `make train` | Train the 5 Snowflake anomaly models (last night held out), detect since, summarize the cast |
 | `make detect` | Re-run Snowflake anomaly detection over last night (or `--from/--to`) and summarize |
+| `make care-plans` | Write the 120 care-plan PDFs, upload + `AI_PARSE_DOCUMENT` + chunk them in Snowflake, build Cortex Search (~10 min) |
 | `make test` | backend pytest + frontend vitest |
 | `make lint` | ruff + eslint + `tsc --noEmit` |
 | `make tunnel` | cloudflared HTTPS tunnel to :8080 |
@@ -89,6 +90,56 @@ Compose reads `.env` and mounts `./secrets` read-only into the backend. The `Cad
 The layout follows SPEC §5. `backend/app/` holds `api/`, `ws/`, `db/` (`tiger.py`, `snowflake_sql.py`, `snowflake_rest.py`), `sim/`, `scoring/`, `deep/` and `devices/`. SQL lives in `backend/sql/{tiger,snowflake}` and scripts in `backend/scripts/`. `frontend/` is a Next.js App Router app. Modules for later phases are placeholders whose docstrings name the phase that fills them in.
 
 ## Status
+
+**Phase 6 (care plans, Cortex Search, AI assessment): done**
+
+What works:
+- **Care plans** (`app/sim/care_plans.py`, `scripts/generate_care_plans.py`): one 1-page reportlab PDF per resident in `data/care_plans/resident_NNN.pdf`, built from the seeded roster, so they match Tiger. Each has 8 sections: diagnoses and history, medications and monitoring, code status/POLST, mobility and fall precautions, baseline cognition and behaviors, night routine, escalation, family contact.
+  - Cast lines: Grant "bed alarm; assist ×1 to bathroom". Patel "POLST on file: comfort-focused treatment. No CPR…" and "…notify hospice + daughter Anjali. No CPR." Alvarez "FULL code", "History of UTIs presenting as confusion…", "Notify provider for acute mental status change…".
+- **Snowflake docs pipeline** (`sql/snowflake/003_docs.sql`, `make care-plans`):
+  - Stage `DOCS.CARE_PLANS` (directory table, SSE), then `PUT`, then `AI_PARSE_DOCUMENT` (LAYOUT) into `DOCS.CARE_PLAN_DOCS`.
+  - Each document is split at its Markdown headings, then `SPLIT_TEXT_RECURSIVE_CHARACTER` (1000/150) makes `DOCS.CARE_PLAN_CHUNKS(resident_id, section, chunk)`.
+  - `CORTEX SEARCH SERVICE DOCS.CARE_PLAN_SEARCH ON chunk ATTRIBUTES resident_id, section`.
+  - Verified: 120 docs parsed, 1,200 chunks. The run took 406 s to parse and 178 s to build the service. Tiger `residents.care_plan_uri` is set.
+- **REST client** (`app/db/snowflake_rest.py`):
+  - Key-pair JWT. iss/sub = `ACCOUNT.LOGIN_NAME` upper-cased, as the connector does. On this account the user NAME is lowercase and case-sensitive, but the JWT is matched on LOGIN_NAME (the email in `SNOWFLAKE_USER`).
+  - Methods: `cortex_complete`, `search_care_plan` (REST `:query`, `@eq` filter on resident_id), `sql` (SQL API `/api/v2/statements`) and `analyst_message` (stub for Phase 9).
+  - Every call is counted under `rest.*` in `/api/stats/snowflake`, which also shows `assessments` stats and REST status.
+- **AI assessment** (`app/deep/assess.py`):
+  - Context: profile + meds/flags, the deterministic score and top factors, the NEWS2 breakdown, the last 2 Snowflake anomaly buckets (value vs expected and 99 % range), the Tiger personal baseline, an 8 h hourly trend, 12 h of events/notes/intake, the forecast (none yet) and the top 4 Cortex Search chunks. The search runs in parallel with the Tiger reads.
+  - Guarded prompt: only facts in the context, no diagnosis, cite the numbers, bedside checks, respect code status/POLST, quote the care plan verbatim.
+  - `validate()` coerces the shape and **drops any citation whose quote isn't in the retrieved chunks**.
+  - Results are stored in Snowflake `CORE.AI_ASSESSMENTS` (via the SQL API) and Tiger `ai_insights` (kind `assessment`), plus a `/ws/live` `insight` message.
+  - Triggers (live, scanned every 10 s): tier rises to HIGH/CRITICAL (debounced 2 min), or a top-5 non-STABLE resident whose assessment is > 15 min old (at most one try per 15 min). Also the Refresh button (`POST /api/explain/{id}[?as_of=]`). One call in flight per resident, 2 at a time.
+  - The card shows a Cortex assessment ≤ 60 min old and known by `as_of`, else the Phase 4 template (same JSON shape). Callers wait at most 8 s. A slower call keeps running (`pending: true`) and replaces the template when it lands. An error falls back at once.
+- **UI**:
+  - AI card: headline, assessment, possible concerns, recommended-checks checklist, escalation, expandable care-plan citations, "Snowflake Cortex · model · HH:MM", and Refresh. Refresh shows "Asking Snowflake Cortex…" until the WS `insight` arrives.
+  - Queue cards show the Cortex headline with its time ("AI summary pending" for HIGH/CRITICAL residents without one).
+- **Tests**: backend **287** passed (JWT claims/signature, response parsing, the SQL-API fallback, the search request, care-plan sections and cast lines, PDF render, citation validation, query wording, trigger/debounce, headline age, timeout/error fallback). Frontend **22** passed. `make lint` is clean.
+
+Verified against the real accounts (as_of = last night via `POST /api/explain/{id}?as_of=`):
+- **Alvarez at 02:14** (HIGH 63), `claude-sonnet-5`, via the SQL API:
+  - Headline "Rising HR/RR, low SpO2 overnight; check Rosa now".
+  - Concerns: "Possible early infection (UTI) per history" and low fluids.
+  - Checks: mental status vs baseline, temperature now, fluids and urine, breathing/SpO2.
+  - Cites "History of UTIs presenting as confusion…" and "Notify provider for acute mental status change…".
+  - Caveat "No documented confusion or fever yet". It invents no confusion: the 02:20 note is not in its context.
+- **Patel at 04:20** (CRITICAL, unresponsive rule):
+  - Checks: responsiveness, breathing comfort, pain, positioning/mouth care.
+  - Escalation: comfort check, then hospice + daughter Anjali, no CPR, no transfer.
+  - Cites the POLST line and his escalation line.
+- **Snowflake unreachable** (second backend with HTTPS routed to a dead proxy): `POST /api/explain/101` returns the template with "Snowflake Cortex unavailable (ConnectError); showing the template". Patel's comfort-care escalation is still there, and the resident page returns 200.
+- **Live**: the dev backend assessed the top residents automatically, and the queue shows their headlines. `CORE.AI_ASSESSMENTS` and Tiger hold the same 11 rows.
+
+Known issues:
+- **REST `inference:complete` is refused for this account** (403 `003001` "This account is not allowed to access this endpoint", for every model, with valid JWT auth). The client tries it, then runs `SNOWFLAKE.CORTEX.COMPLETE` through the **SQL REST API** with the same messages, and retries the endpoint every 30 min. If you can get the endpoint enabled (Snowflake support / non-trial account), nothing needs to change. Cortex Search REST works.
+- **Latency**: a Cortex completion takes ~10–15 s, plus ~1.5 s for search and ~1–2 s for context. So a Refresh usually passes the 8 s budget, shows "Asking Snowflake Cortex…", and gets the new card ~15 s later. Automatic triggers pre-compute cards for flagged residents.
+  - COMPLETE's `response_format` (structured output) made the same call take > 45 s, so on the SQL-API path the JSON schema goes in the prompt and the output is validated.
+  - `temperature` is not sent: `claude-sonnet-5-5` / `opus-5-5` / `haiku-5-5` reject it ("malformed request").
+  - `CORTEX_MODEL` stays `claude-sonnet-5` (passes `make check`, ~9–13 s). `sonnet-5-5` ignored the length limits in one run and hit the token cap.
+- **Personal baseline in the context** comes from today's `resident_baselines`, even for a historical as_of (the hourly job keeps no history).
+- Care-plan title blocks are chunked under their own heading ("Care Plan: <name>"), so `CARE_PLAN_CHUNKS` has 129 distinct section names. Harmless: those chunks rank low.
+- `make care-plans` re-parses all 120 PDFs (~7 min) on every run.
 
 **Phase 5 (Snowflake core: sync + anomaly detection): done**
 

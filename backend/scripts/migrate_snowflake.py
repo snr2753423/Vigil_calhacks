@@ -2,7 +2,8 @@
 
 001_setup.sql is the one-time ACCOUNTADMIN bootstrap you paste into Snowsight (`make keygen` prints it);
 pass --include-setup to run it from here too (your login must have ACCOUNTADMIN). 004_models.sql trains
-the anomaly models and is run by `make train` instead.
+the anomaly models and is run by `make train` instead; 003_docs.sql needs the care-plan PDFs and is run by
+`make care-plans`.
 """
 
 import argparse

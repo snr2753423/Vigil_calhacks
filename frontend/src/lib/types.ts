@@ -42,6 +42,8 @@ export type WireCard = {
   rr: number | null;
   spo2: number | null;
   spark?: (number | null)[];
+  /** The newest Snowflake Cortex headline (flagged cards only). */
+  ai?: { text: string; at: string };
 };
 
 export type Kpis = {
@@ -198,6 +200,26 @@ export type Assessment = {
   confidence: "low" | "medium" | "high";
   caveats: string;
   source: "template" | "cortex";
+  model: string;
+  /** The moment the assessment describes (live: when it was made; replay: the cursor). */
+  as_of?: string;
+  /** A Snowflake Cortex call for this resident is running. */
+  pending?: boolean;
+  /** Why the template is shown instead of Cortex (POST /api/explain only). */
+  fallback_reason?: string;
+  generated_at?: string;
+  latency_ms?: number;
+  via?: "inference_rest" | "sql_api";
+};
+
+/** /ws/live: a new Cortex assessment was stored. */
+export type InsightMessage = {
+  type: "insight";
+  kind: "assessment";
+  resident_id: number;
+  as_of: string;
+  live: boolean;
+  headline: string;
   model: string;
 };
 

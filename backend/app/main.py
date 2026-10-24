@@ -7,10 +7,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import checks, health, insights, notes, queue, residents, sim, staff, stats
+from app.api import checks, explain, health, insights, notes, queue, residents, sim, staff, stats
 from app.config import get_settings
-from app.db import tiger
-from app.deep import sync
+from app.db import snowflake_rest, tiger
+from app.deep import assess, sync
 from app.scoring import evaluator
 from app.sim import live_loop
 from app.ws import hub
@@ -30,6 +30,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         tasks.append(eval_task)
     if (sync_task := sync.start()) is not None:  # Tiger → Snowflake + anomaly detection (deep tier)
         tasks.append(sync_task)
+    if (assess_task := assess.start()) is not None:  # Cortex AI assessments on tier rise / stale top 5
+        tasks.append(assess_task)
     try:
         yield
     finally:
@@ -41,6 +43,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 log.error("shutdown: task %s had failed", task.get_name(), exc_info=exc)
         for task in stuck:  # never let a wedged task block shutdown (and with it `--reload`)
             log.warning("shutdown: task %s did not stop within %.0f s", task.get_name(), SHUTDOWN_TIMEOUT_S)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(snowflake_rest.client().aclose(), SHUTDOWN_TIMEOUT_S)
         with contextlib.suppress(Exception):
             await asyncio.wait_for(tiger.close_pool(), SHUTDOWN_TIMEOUT_S)
 
@@ -54,5 +58,6 @@ app.include_router(notes.router)
 app.include_router(staff.router)
 app.include_router(sim.router)
 app.include_router(insights.router)
+app.include_router(explain.router)
 app.include_router(stats.router)
 app.include_router(hub.router)

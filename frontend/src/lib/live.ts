@@ -1,5 +1,12 @@
 // Types and pure helpers for the /ws/live stream (server → client).
-import type { AlertMessage, EventMessage, InjectionMessage, QueueMessage, SimState } from "@/lib/types";
+import type {
+  AlertMessage,
+  EventMessage,
+  InjectionMessage,
+  InsightMessage,
+  QueueMessage,
+  SimState,
+} from "@/lib/types";
 
 export type { SimState } from "@/lib/types";
 
@@ -27,7 +34,8 @@ export type LiveMessage =
   | AlertMessage
   | SimMessage
   | InjectionMessage
-  | EventMessage;
+  | EventMessage
+  | InsightMessage;
 
 /** An alert waiting in the toast stack. */
 export type ToastAlert = AlertMessage & { key: string; receivedAt: number };
@@ -49,6 +57,7 @@ export type LiveState = {
   alerts: ToastAlert[];
   lastEvent: EventMessage | null;
   lastInjection: InjectionMessage | null;
+  lastInsight: InsightMessage | null;
 };
 
 export const MAX_INTERVALS = 30;
@@ -65,6 +74,7 @@ export const initialLiveState: LiveState = {
   alerts: [],
   lastEvent: null,
   lastInjection: null,
+  lastInsight: null,
 };
 
 const KNOWN_TYPES = new Set<LiveMessage["type"]>([
@@ -75,6 +85,7 @@ const KNOWN_TYPES = new Set<LiveMessage["type"]>([
   "sim",
   "injection",
   "event",
+  "insight",
 ]);
 
 export function liveSocketUrl(
@@ -147,6 +158,8 @@ export function applyMessage(
     }
     case "injection":
       return { lastInjection: msg };
+    case "insight":
+      return { lastInsight: msg };
     case "event": {
       // A logged check answers that resident's alert.
       const rid = msg.event.resident_id;

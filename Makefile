@@ -6,7 +6,7 @@ BACKEND  := backend
 FRONTEND := frontend
 DAYS ?=
 
-.PHONY: help install dev up down logs check keygen migrate migrate-sf seed sf-load train detect test lint tunnel
+.PHONY: help install dev up down logs check keygen migrate migrate-sf seed sf-load train detect care-plans test lint tunnel
 
 help: ## Show this help
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-9s %s\n", $$1, $$2}'
@@ -62,6 +62,9 @@ train: ## Train the 5 Snowflake ANOMALY_DETECTION models (last night held out), 
 
 detect: ## Run Snowflake anomaly detection over last night (or --from/--to) and summarize the flags
 	cd $(BACKEND) && uv run python -u scripts/detect_anomalies.py
+
+care-plans: ## Generate care-plan PDFs, upload + parse + chunk in Snowflake, build Cortex Search (003_docs.sql)
+	cd $(BACKEND) && uv run python -u scripts/index_care_plans.py
 
 test: ## Backend pytest + frontend vitest
 	cd $(BACKEND) && uv run pytest -q

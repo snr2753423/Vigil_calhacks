@@ -10,6 +10,7 @@ dependencies = [
     "numpy>=2.5.4",
     "psycopg[binary,pool]>=3.3.6",
     "pydantic-settings>=2.16.0",
+    "reportlab>=5.0.1",
     "snowflake-connector-python[pandas]>=5.0.0",
     "uvicorn[standard]>=0.54.0",
 ]
@@ -24,6 +25,7 @@ packages = ["app"]
 [dependency-groups]
 dev = [
     "httpx2>=2.13.1",
+    "pypdf>=6.21.1",
     "pytest>=9.1.1",
     "ruff>=0.17.1",
 ]

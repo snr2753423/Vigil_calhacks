@@ -9,9 +9,9 @@ import psycopg
 from fastapi import APIRouter
 
 from app.config import get_settings
+from app.db import snowflake_rest, tiger
 from app.db import snowflake_sql as sf
-from app.db import tiger
-from app.deep import anomaly, sync
+from app.deep import anomaly, assess, sync
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
@@ -28,6 +28,8 @@ async def snowflake_stats() -> dict:
         },
         "sync": sync.stats.to_dict(),
         "detection": anomaly.stats.to_dict(),
+        "assessments": assess.get_assessor().stats.to_dict(),
+        "rest": snowflake_rest.client().status(),
         "sync_state": None,
         "models": None,
         "insights": None,

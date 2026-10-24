@@ -32,6 +32,7 @@ import psycopg
 
 from app.config import Settings, get_settings
 from app.db import tiger
+from app.deep import assess
 from app.scoring import priority
 from app.scoring.baseline import Baselines
 from app.scoring.features import Profile, ResidentFeatures, build_features
@@ -354,6 +355,8 @@ class QueueItem:
         }
         if spark:
             card["spark"] = [None if v is None else round(v) for v in f.hr_spark]
+        if d.tier != "STABLE" and (ai := assess.get_assessor().headline_for(p.resident_id, f.as_of)):
+            card["ai"] = ai  # the newest Snowflake Cortex headline: {text, at}
         return card
 
     def signature(self) -> tuple:
@@ -466,6 +469,26 @@ async def evaluate_at(
     queue = await evaluate(conn, as_of, ctx, AlertGate(persistence=1), clock, check_scores=check_scores)
     queue.gated = False
     return queue
+
+
+def live_card(rid: int) -> dict | None:
+    """This resident's full card in the live evaluator's latest queue."""
+    if evaluator is None or evaluator.latest is None:
+        return None
+    for rank, it in enumerate(evaluator.latest.items, start=1):
+        if it.profile.resident_id == rid:
+            return it.to_dict(rank)
+    return None
+
+
+async def current_for(conn: psycopg.AsyncConnection, rid: int, at: datetime, *, live: bool) -> dict | None:
+    """The full score card for one resident: the live evaluator's entry, or a stateless evaluation `as_of`."""
+    current = live_card(rid) if live else None
+    if current is None:
+        ctx = evaluator.ctx if evaluator is not None else None
+        queue = await evaluate_at(conn, at, ZoneInfo(get_settings().facility_tz), ctx, live=live)
+        current = next((it.to_dict(i) for i, it in enumerate(queue.items, 1) if it.profile.resident_id == rid), None)
+    return current
 
 
 # --------------------------------------------------------------------------- live loop

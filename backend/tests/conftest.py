@@ -11,6 +11,7 @@ def client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SIM_LIVE_ENABLED", "false")  # tests never stream into the real Tiger service
     monkeypatch.setenv("EVALUATOR_ENABLED", "false")  # …nor write priority snapshots / alerts into it
     monkeypatch.setenv("SNOWFLAKE_SYNC_ENABLED", "false")  # …nor sync to / detect in Snowflake
+    monkeypatch.setenv("ASSESS_ENABLED", "false")  # …nor call Cortex for AI assessments
     get_settings.cache_clear()
     with TestClient(app) as c:  # context manager runs the lifespan (heartbeat task)
         yield c
