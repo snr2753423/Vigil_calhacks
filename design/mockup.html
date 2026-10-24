@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en" data-theme="night">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vigil Redesign Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  /* ---------- Tokens: warm day + warm, low-blue night ---------- */
+  :root, [data-theme="day"] {
+    --bg: #f6f1e9;          /* warm paper */
+    --surface: #fffdf9;
+    --surface-2: #f0e9de;
+    --line: #e2d8c9;
+    --text: #2b2723;
+    --muted: #6f665c;
+    --soft: #8f857a;
+    --accent: #3f6f63;      /* sage-teal: calm, not neon */
+    --accent-ink: #ffffff;
+    --crit: #b4432f;  --crit-bg: #f7e1da;
+    --high: #b36b12;  --high-bg: #f7e8d0;
+    --watch: #7a6a1c; --watch-bg: #f1ebcd;
+    --stable: #5d6b66; --stable-bg: #e6ebe7;
+    --band: rgba(63,111,99,.14);
+    --shadow: 0 1px 2px rgba(60,40,20,.06), 0 6px 18px rgba(60,40,20,.06);
+  }
+  [data-theme="night"] {
+    --bg: #1c1916;          /* warm charcoal, low blue light */
+    --surface: #26221e;
+    --surface-2: #2f2a25;
+    --line: #3b352e;
+    --text: #f1e6d6;        /* warm cream */
+    --muted: #b9ab98;
+    --soft: #8e8273;
+    --accent: #d9a35b;      /* amber */
+    --accent-ink: #1c1916;
+    --crit: #e8836c;  --crit-bg: #3d2520;
+    --high: #e3a556;  --high-bg: #3b2c1a;
+    --watch: #cdbb6a; --watch-bg: #33301d;
+    --stable: #9aa59f; --stable-bg: #2b2e2b;
+    --band: rgba(217,163,91,.13);
+    --shadow: 0 1px 2px rgba(0,0,0,.3);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+    font-size: 17px; line-height: 1.45;
+  }
+  button { font: inherit; cursor: pointer; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 0 24px 64px; }
+
+  /* ---------- Mockup chrome (not part of the design) ---------- */
+  .mock-bar {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+    padding: 12px 24px; background: #111; color: #ddd; font: 14px system-ui, sans-serif;
+  }
+  .mock-bar .seg { display: inline-flex; border: 1px solid #444; border-radius: 8px; overflow: hidden; }
+  .mock-bar .seg button { background: none; color: #ddd; border: 0; padding: 6px 12px; font-size: 14px; }
+  .mock-bar .seg button[aria-pressed="true"] { background: #ddd; color: #111; }
+  .screen-label { margin: 28px 0 10px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--soft); }
+
+  /* ---------- App header ---------- */
+  header.app {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 16px 28px;
+    padding: 18px 0; border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand b { font-size: 22px; color: var(--accent); letter-spacing: -.01em; }
+  .brand span { color: var(--muted); }
+  nav.app { display: flex; gap: 4px; }
+  nav.app a { color: var(--muted); text-decoration: none; padding: 8px 12px; border-radius: 10px; }
+  nav.app a.on { color: var(--text); background: var(--surface-2); }
+  .shift { margin-left: auto; display: flex; align-items: center; gap: 18px; color: var(--muted); }
+  .clock { white-space: nowrap; font-size: 22px; color: var(--text); font-weight: 700; }
+  .replay {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px; justify-content: space-between;
+    margin-top: 14px; padding: 10px 16px; border-radius: 12px; background: var(--surface-2); color: var(--muted);
+  }
+  .replay strong { color: var(--text); }
+  .replay .ctl { display: flex; gap: 8px; }
+  .chipbtn { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 10px; padding: 6px 14px; }
+
+  /* ---------- Queue layout ---------- */
+  .queue { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 24px; margin-top: 22px; }
+  @media (max-width: 960px) { .queue { grid-template-columns: 1fr; } }
+  .queue > div, .resident > div { min-width: 0; }
+  .person { flex-wrap: wrap; }
+  @media (max-width: 600px) { .wrap { padding: 0 16px 48px; } .shift { margin-left: 0; width: 100%; justify-content: space-between; } .row { flex-wrap: wrap; } .row .main { flex-basis: calc(100% - 60px); } .next { padding: 18px; } .person h3 { font-size: 24px; } .rooms { grid-template-columns: repeat(5, 1fr); } }
+  h2 { font-size: 15px; font-weight: 700; color: var(--muted); margin: 0 0 10px; letter-spacing: .02em; }
+
+  .summary { display: flex; flex-wrap: wrap; gap: 8px 20px; color: var(--muted); margin: 0 0 18px; }
+  .summary b { color: var(--text); }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); }
+  .next { padding: 24px; border-left: 6px solid var(--high); }
+  .next .eyebrow { display: flex; align-items: center; gap: 10px; color: var(--high); font-weight: 700; }
+  .person { display: flex; align-items: center; gap: 16px; margin: 14px 0 6px; }
+  .avatar {
+    flex: none; width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center;
+    background: var(--surface-2); color: var(--text); font-weight: 700; font-size: 20px;
+  }
+  .person h3 { margin: 0; font-size: 28px; line-height: 1.15; }
+  .person .where { color: var(--muted); }
+  .code { margin-left: auto; align-self: flex-start; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line); color: var(--muted); font-size: 14px; white-space: nowrap; }
+  .why { font-size: 21px; margin: 14px 0 10px; }
+  .facts { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 15px; }
+  .facts b { color: var(--text); font-weight: 700; }
+  .suggest { margin-top: 18px; padding: 14px 16px; border-radius: 12px; background: var(--surface-2); }
+  .suggest p { margin: 0 0 6px; }
+  .suggest .src { color: var(--soft); font-size: 14px; margin: 6px 0 0; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+  .primary { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 14px; padding: 16px 26px; font-size: 19px; font-weight: 700; }
+  .secondary { background: none; color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 16px 22px; font-size: 18px; }
+
+  .list { margin-top: 18px; }
+  .row { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-top: 1px solid var(--line); }
+  .row:first-of-type { border-top: 0; }
+  .row .avatar { width: 42px; height: 42px; font-size: 15px; }
+  .row .main { min-width: 0; flex: 1; }
+  .row .name { font-weight: 700; font-size: 18px; }
+  .row .reason { color: var(--muted); }
+  .row .when { color: var(--soft); font-size: 14px; white-space: nowrap; }
+  .tier { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 14px; font-weight: 700; white-space: nowrap; }
+  .tier.high { color: var(--high); background: var(--high-bg); }
+  .tier.watch { color: var(--watch); background: var(--watch-bg); }
+  .tier.crit { color: var(--crit); background: var(--crit-bg); }
+  .tier.stable { color: var(--stable); background: var(--stable-bg); }
+  .tier svg { width: 14px; height: 14px; }
+  .task { display: flex; align-items: center; gap: 12px; padding: 14px 18px; color: var(--muted); }
+  .task b { color: var(--text); }
+  .more { padding: 14px 18px; border-top: 1px solid var(--line); color: var(--muted); display: flex; justify-content: space-between; }
+
+  /* ---------- Floor plan ---------- */
+  .floor { padding: 18px; }
+  .wing { margin-bottom: 18px; }
+  .wing-name { color: var(--muted); font-size: 14px; margin-bottom: 6px; }
+  .hall { display: grid; grid-template-rows: auto 18px auto; gap: 0; }
+  .rooms { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; }
+  .corridor { display: flex; align-items: center; justify-content: center; color: var(--soft); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; background: repeating-linear-gradient(90deg, transparent 0 10px, var(--line) 10px 11px); border-radius: 4px; }
+  .room { height: 30px; border-radius: 6px; background: var(--surface-2); color: var(--soft); font-size: 11px; display: grid; place-items: center; }
+  .room.high { background: var(--high-bg); color: var(--high); outline: 2px solid var(--high); font-weight: 700; }
+  .room.watch { background: var(--watch-bg); color: var(--watch); font-weight: 700; }
+  .room.task { position: relative; }
+  .room.task::after { content: ""; position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .station { margin: 4px 0 16px; padding: 8px; text-align: center; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 14px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+
+  /* ---------- Resident page ---------- */
+  .resident { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 24px; margin-top: 22px; }
+  @media (max-width: 960px) { .resident { grid-template-columns: 1fr; } }
+  .rhead { padding: 24px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; grid-column: 1 / -1; }
+  .rhead .avatar { width: 72px; height: 72px; font-size: 26px; }
+  .rhead h3 { margin: 0; font-size: 32px; }
+  .rhead .sub { color: var(--muted); }
+  .bigcode { margin-left: auto; text-align: right; }
+  .bigcode .label { font-size: 13px; color: var(--soft); text-transform: uppercase; letter-spacing: .08em; }
+  .bigcode .val { font-size: 22px; font-weight: 700; }
+  .section { padding: 22px 24px; }
+  .section h4 { margin: 0 0 12px; font-size: 15px; color: var(--muted); letter-spacing: .02em; }
+  .check { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); font-size: 18px; }
+  .check:first-of-type { border-top: 0; }
+  .box { flex: none; width: 24px; height: 24px; border-radius: 6px; border: 2px solid var(--soft); margin-top: 2px; }
+  blockquote { margin: 10px 0 0; padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--surface-2); border-radius: 0 10px 10px 0; color: var(--text); }
+  blockquote small { display: block; color: var(--soft); margin-top: 4px; }
+  .call { font-size: 18px; }
+  .vitals { display: grid; gap: 14px; }
+  .vital { display: grid; grid-template-columns: 1fr 84px; grid-template-areas: "lbl lbl" "chart now"; align-items: center; gap: 4px 14px; }
+  .vital .lbl { grid-area: lbl; } .vital svg { grid-area: chart; } .vital .now { grid-area: now; }
+  .vital .lbl { color: var(--muted); }
+  .vital .now { text-align: right; font-weight: 700; font-size: 18px; }
+  .vital .now small { display: block; font-weight: 400; font-size: 13px; color: var(--soft); }
+  .vital svg { width: 100%; height: auto; display: block; }
+  .note { color: var(--soft); font-size: 14px; margin-top: 10px; }
+  .hide { display: none; }
+</style>
+</head>
+<body>
+
+<div class="mock-bar">
+  <span><b>Vigil redesign mockup</b> · static, sample data from the 02:14 replay</span>
+  <span style="display:flex;gap:10px;flex-wrap:wrap">
+    <span class="seg" role="group" aria-label="Theme">
+      <button data-theme-btn="night" aria-pressed="true">Night shift</button>
+      <button data-theme-btn="day" aria-pressed="false">Day shift</button>
+    </span>
+    <span class="seg" role="group" aria-label="Screen">
+      <button data-screen-btn="queue" aria-pressed="true">Rounds queue</button>
+      <button data-screen-btn="resident" aria-pressed="false">Resident page</button>
+    </span>
+  </span>
+</div>
+
+<div class="wrap">
+  <header class="app">
+    <div class="brand"><b>Vigil</b><span>Sunrise Gardens</span></div>
+    <nav class="app"><a class="on" href="#">Rounds</a><a href="#">Handoff</a><a href="#">Ask</a><a href="#">More</a></nav>
+    <div class="shift"><span>Night shift · Linda (RN), Daniel (LPN), 3 aides</span><span class="clock">2:14 AM</span></div>
+  </header>
+  <div class="replay">
+    <span><strong>Replaying last night</strong> through the live system · paused at 2:14 AM</span>
+    <span class="ctl"><button class="chipbtn">Play</button><button class="chipbtn">60×</button><button class="chipbtn">Back to live</button></span>
+  </div>
+
+  <!-- ===================== QUEUE ===================== -->
+  <section id="screen-queue">
+    <p class="screen-label">Rounds queue · who to check next</p>
+    <p class="summary"><span><b>1</b> to check soon</span><span><b>2</b> to keep an eye on</span><span><b>117</b> resting as usual</span><span><b>1</b> device task</span><span><b>9</b> rounds overdue</span></p>
+
+    <div class="queue">
+      <div>
+        <h2>CHECK NEXT</h2>
+        <article class="card next">
+          <div class="eyebrow">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17h.01"/></svg>
+            High · please check within 15 minutes
+          </div>
+          <div class="person">
+            <div class="avatar" aria-hidden="true">RA</div>
+            <div>
+              <h3>Rosa Alvarez</h3>
+              <div class="where">Room 301 · Memory Care · 87</div>
+            </div>
+            <span class="code">Full code</span>
+          </div>
+          <p class="why">Breathing faster and heart rate higher than usual for her, and restless in bed since about 11 pm.</p>
+          <div class="facts">
+            <span>Breathing <b>21</b>/min <span>(her usual 17–19)</span></span>
+            <span>Heart rate <b>87</b> <span>(usual 67–79)</span></span>
+            <span>Oxygen <b>92%</b></span>
+            <span>Last checked <b>2 h 36 min</b> ago</span>
+          </div>
+          <div class="suggest">
+            <p><b>Worth checking:</b> temperature, whether she's more confused than usual, and fluids. She drank about half her fluids this evening.</p>
+            <p>Her care plan notes that UTIs have shown up as confusion before.</p>
+            <p class="src">Suggested by Vigil from her vitals and care plan · 2:14 AM</p>
+          </div>
+          <div class="actions">
+            <button class="primary">I checked on Rosa</button>
+            <button class="secondary">Open Rosa's page</button>
+          </div>
+        </article>
+
+        <div class="card list">
+          <h2 style="padding:16px 18px 0">KEEP AN EYE ON</h2>
+          <div class="row">
+            <div class="avatar" aria-hidden="true">HL</div>
+            <div class="main"><div class="name">Henry Lee <span class="where" style="font-weight:400;color:var(--muted)">· Room 138</span></div>
+              <div class="reason">Breathing slowly rising tonight; his heart pill can hide a faster pulse.</div></div>
+            <span class="tier watch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><circle cx="12" cy="12" r="3"/><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/></svg>Watch</span>
+            <span class="when">checked 1 h 57 min ago</span>
+          </div>
+          <div class="row">
+            <div class="avatar" aria-hidden="true">WL</div>
+            <div class="main"><div class="name">Wanda Lewis <span style="font-weight:400;color:var(--muted)">· Room 128</span></div>
+              <div class="reason">Up to the bathroom twice since midnight, more than usual.</div></div>
+            <span class="tier watch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><circle cx="12" cy="12" r="3"/><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/></svg>Watch</span>
+            <span class="when">checked 1 h 20 min ago</span>
+          </div>
+          <div class="task">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="7" y="6" width="10" height="12" rx="3"/><path d="M9 6V3h6v3M9 18v3h6v-3"/></svg>
+            <span><b>Task:</b> Doris Wright's wristband has been off for 1 h 10 min. Put it back on next time you pass Room 106.</span>
+          </div>
+          <div class="more"><span>117 residents resting as usual</span><span>Show all ›</span></div>
+        </div>
+      </div>
+
+      <div>
+        <h2>FLOOR</h2>
+        <div class="card floor">
+          <div class="wing">
+            <div class="wing-name">Memory Care · rooms 301–320</div>
+            <div class="hall">
+              <div class="rooms" id="mc-a"></div>
+              <div class="corridor">hallway</div>
+              <div class="rooms" id="mc-b"></div>
+            </div>
+          </div>
+          <div class="station">Nurses' station</div>
+          <div class="wing">
+            <div class="wing-name">East · long-term care · rooms 101–140</div>
+            <div class="hall">
+              <div class="rooms" id="e-a"></div>
+              <div class="corridor">hallway</div>
+              <div class="rooms" id="e-b"></div>
+            </div>
+          </div>
+          <div class="legend">
+            <span class="tier high">High</span><span class="tier watch">Watch</span><span class="tier stable">Resting</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== RESIDENT ===================== -->
+  <section id="screen-resident" class="hide">
+    <p class="screen-label">Resident page · who, why now, what to do</p>
+    <div class="resident">
+      <div class="card rhead">
+        <div class="avatar" aria-hidden="true">RA</div>
+        <div>
+          <h3>Rosa Alvarez</h3>
+          <div class="sub">87 · Room 301, Memory Care · moderate dementia · needs 1 person to help her walk</div>
+          <div style="margin-top:8px"><span class="tier high"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M12 3 2 20h20L12 3z"/></svg>High · #1 to check</span></div>
+        </div>
+        <div class="bigcode"><div class="label">Code status</div><div class="val">Full code</div><div class="sub" style="font-size:14px">Daughter: Marisol Alvarez</div></div>
+      </div>
+
+      <div style="display:grid;gap:24px">
+        <div class="card section">
+          <h4>WHY NOW</h4>
+          <p style="font-size:21px;margin:0">Since about 11 pm her breathing and heart rate have been above her own usual range, and she's been restless in bed. No fever recorded yet. She drank about half her fluids this evening.</p>
+          <p class="note">Her usual range comes from her last 9 days. Exact numbers are in the vitals below.</p>
+        </div>
+        <div class="card section">
+          <h4>WORTH CHECKING AT THE BEDSIDE</h4>
+          <div class="check"><span class="box"></span><span>Is she more confused than usual? Ask her name and where she is.</span></div>
+          <div class="check"><span class="box"></span><span>Take her temperature.</span></div>
+          <div class="check"><span class="box"></span><span>Offer fluids; note urine color and how often.</span></div>
+          <div class="check"><span class="box"></span><span>Watch her breathing and oxygen for a minute.</span></div>
+          <h4 style="margin-top:18px">FROM HER CARE PLAN</h4>
+          <blockquote>"History of UTIs presenting as confusion: past urinary tract infections showed up as new or worse confusion, agitation or restlessness, often without fever."<small>Care plan · Diagnoses and history</small></blockquote>
+          <blockquote>"Notify provider for acute mental status change."<small>Care plan · Escalation</small></blockquote>
+          <p class="note">Suggested by Vigil (AI, from her vitals and care plan) · 2:14 AM · decision support, not a diagnosis</p>
+        </div>
+        <div class="card section">
+          <h4>IF YOU FIND A CHANGE</h4>
+          <p class="call" style="margin:0">Call the provider about a change in mental status. She is <b>full code</b>; hospital transfer is OK if her condition worsens.</p>
+          <div class="actions"><button class="primary">I checked on Rosa</button><button class="secondary">Add a note (voice or text)</button></div>
+        </div>
+      </div>
+
+      <div class="card section">
+        <h4>VITALS TONIGHT · the shaded band is her usual range</h4>
+        <div class="vitals" id="vitals"></div>
+        <p class="note">Dots mark readings Snowflake's model flagged as unusual for her. Tap a chart for details.</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  // Theme + screen switches (mockup only).
+  const root = document.documentElement;
+  document.querySelectorAll("[data-theme-btn]").forEach(b => b.onclick = () => {
+    root.dataset.theme = b.dataset.themeBtn;
+    document.querySelectorAll("[data-theme-btn]").forEach(x => x.setAttribute("aria-pressed", x === b));
+  });
+  document.querySelectorAll("[data-screen-btn]").forEach(b => b.onclick = () => {
+    document.getElementById("screen-queue").classList.toggle("hide", b.dataset.screenBtn !== "queue");
+    document.getElementById("screen-resident").classList.toggle("hide", b.dataset.screenBtn !== "resident");
+    document.querySelectorAll("[data-screen-btn]").forEach(x => x.setAttribute("aria-pressed", x === b));
+  });
+
+  // Floor plan rooms along two sides of a hallway.
+  function rooms(id, from, to, marks) {
+    const el = document.getElementById(id);
+    for (let n = from; n <= to; n++) {
+      const d = document.createElement("div");
+      d.className = "room " + (marks[n] || "");
+      d.textContent = n;
+      el.appendChild(d);
+    }
+  }
+  rooms("mc-a", 301, 310, { 301: "high" });
+  rooms("mc-b", 311, 320, {});
+  rooms("e-a", 101, 110, { 106: "task" });
+  rooms("e-b", 128, 137, { 128: "watch" });
+  // (Lee is in 138; shown on the full floor in the real app.)
+
+  // Simple vitals rows: line over a "usual range" band, with a few flagged dots.
+  const series = [
+    { lbl: "Breathing", unit: "/min", now: "21", usual: "usual 17–19", lo: 17, hi: 19, min: 13, max: 24,
+      pts: [16,16.5,16,17,17.5,18,18.5,19.5,19.8,20,20.4,20.8,21], flag: [8,10,12] },
+    { lbl: "Heart rate", unit: "bpm", now: "87", usual: "usual 67–79", lo: 67, hi: 79, min: 55, max: 95,
+      pts: [70,71,72,74,76,77,79,81,82,84,85,86,87], flag: [7,9,11,12] },
+    { lbl: "Oxygen", unit: "%", now: "92", usual: "usual 93–96", lo: 93, hi: 96, min: 88, max: 99,
+      pts: [95,95,94,95,94,94,93,93,93,92,93,92,92], flag: [9,12] },
+    { lbl: "Restlessness", unit: "", now: "3×", usual: "her usual", lo: 0.6, hi: 1.4, min: 0, max: 4,
+      pts: [1,1.2,1.4,2,2.4,2.2,2.6,2.8,3,2.9,3.1,3,3], flag: [4,6,8,10] },
+  ];
+  const W = 600, H = 84;
+  const host = document.getElementById("vitals");
+  series.forEach(s => {
+    const y = v => H - 4 - (v - s.min) / (s.max - s.min) * (H - 8);
+    const x = i => i / (s.pts.length - 1) * (W - 8) + 4;
+    const d = s.pts.map((v, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(v).toFixed(1)).join(" ");
+    const dots = s.flag.map(i => `<circle cx="${x(i)}" cy="${y(s.pts[i])}" r="5" fill="var(--high)"/>`).join("");
+    host.insertAdjacentHTML("beforeend", `
+      <div class="vital">
+        <span class="lbl">${s.lbl}</span>
+        <svg viewBox="0 0 ${W} ${H}" aria-label="${s.lbl} tonight">
+          <rect x="0" y="${y(s.hi)}" width="${W}" height="${y(s.lo) - y(s.hi)}" fill="var(--band)"/>
+          <path d="${d}" fill="none" stroke="var(--text)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+          ${dots}
+        </svg>
+        <span class="now">${s.now}<small>${s.usual}</small></span>
+      </div>`);
+  });
+</script>
+</body>
+</html>

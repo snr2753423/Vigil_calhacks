@@ -17,3 +17,7 @@ node_modules/
 data/care_plans/
 # os
 .DS_Store
+
+# demo video tooling and output
+demo-video/node_modules/
+demo-video/out/
