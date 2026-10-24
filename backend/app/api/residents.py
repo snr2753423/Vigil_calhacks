@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import TigerConn, facility_tz, parse_ts
 from app.db import tiger
+from app.deep.assess import template_assessment
 from app.scoring import evaluator as ev
 from app.scoring.baseline import Baselines, tod_block
 
@@ -79,6 +80,7 @@ async def get_resident(resident_id: int, conn: TigerConn, as_of: str | None = No
             "still_minutes_p95": behavior.still_minutes_p95,
         },
         "current": current,
+        "assessment": template_assessment(resident, current),  # Phase 6: Cortex, with this as the fallback
         "events": events,
     }
 

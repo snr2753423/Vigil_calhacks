@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
 import { AppHeader } from "@/components/app-header";
+import { AlertToasts } from "@/components/alert-toasts";
 import { LiveSocket } from "@/components/live-socket";
 import "./globals.css";
 
@@ -21,7 +22,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0b0f17",
+  themeColor: "#0d1424",
   colorScheme: "dark",
 };
 
@@ -33,6 +34,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <LiveSocket />
         <AppHeader />
         {children}
+        <AlertToasts />
       </body>
     </html>
   );

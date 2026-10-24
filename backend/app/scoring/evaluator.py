@@ -47,6 +47,7 @@ APP_NAME = "vigil-eval"
 CONTEXT_TTL_S = 300  # reload roster + baselines this often (the baseline job runs hourly)
 LOG_EVERY_CYCLES = 30
 QUEUE_REFRESH_S = 10.0  # /ws/live: send the queue when a card changes, else at most this often
+WIRE_SPARK_MIN = 24  # /ws/live: HR sparklines for every flagged card and at least this many top cards
 SLOW_CYCLE_MS = 1000
 ALERT_TIERS = ("HIGH", "CRITICAL")
 
@@ -259,6 +260,11 @@ def _iso(ts: datetime | None) -> str | None:
     return ts.isoformat() if ts else None
 
 
+def _iso_s(ts: datetime | None) -> str | None:
+    """Whole-second UTC ISO 8601 ('…Z'), for the compact /ws/live payload."""
+    return ts.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z") if ts else None
+
+
 @dataclass
 class QueueItem:
     profile: Profile
@@ -275,8 +281,8 @@ class QueueItem:
         return (-TIER_RANK[self.tier], -self.decision.score, self.profile.resident_id)
 
     def to_dict(self, rank: int, *, detail: bool = True) -> dict:
-        """The queue card. detail=False (the /ws/live stream) leaves out the score breakdown (components,
-        NEWS2, note concern), which the resident page fetches on demand."""
+        """The REST queue card. detail=False leaves out the score breakdown (components, NEWS2, note concern).
+        /ws/live sends the smaller `to_wire` card instead."""
         p, f, r, d = self.profile, self.features, self.result, self.decision
         c = r.components
         card = {
@@ -314,6 +320,42 @@ class QueueItem:
             }
         return card
 
+    def to_wire(self, *, spark: bool) -> dict:
+        """The compact /ws/live card: only what the Rounds Queue and floor grid draw. Profile fields (name,
+        room, unit, code status) come from GET /api/residents once; the score breakdown from the resident
+        page's GET /api/residents/{id}. Rank is the position in `items`. STABLE cards carry only their top
+        factor (the queue lists them as one-line rows)."""
+        p, f, r, d = self.profile, self.features, self.result, self.decision
+        msc = r.components.minutes_since_check
+        card = {
+            "id": p.resident_id,
+            "score": round(d.score),
+            "tier": d.tier,
+            "rule": None
+            if d.rule is None
+            else {
+                "rule": d.rule.rule,
+                "kind": d.rule.kind,
+                "text": d.rule.text,
+                "since": _iso_s(d.rule.since),
+                "held": d.rule_held,
+                "ack": d.rule_acknowledged,
+            },  # fmt: skip
+            "device": r.device.text if r.device else None,
+            "factors": [{"text": x.text, "kind": x.kind} for x in r.factors[: 3 if d.tier != "STABLE" else 1]],
+            "last_check": _iso_s(f.last_check_ts),
+            "check_min": None if msc is None else round(msc),
+            "suppressed": d.suppressed_until is not None,
+            "in_bed": f.in_bed,
+            "worn": f.worn,
+            "hr": None if f.hr_5m is None else round(f.hr_5m),
+            "rr": None if f.rr_5m is None else round(f.rr_5m),
+            "spo2": None if not f.spo2_recent else round(f.spo2_recent[0]),
+        }
+        if spark:
+            card["spark"] = [None if v is None else round(v) for v in f.hr_spark]
+        return card
+
     def signature(self) -> tuple:
         """What a nurse acts on: who is flagged, at what tier, for which rule. Scores, factor wording and
         vitals drift every cycle and are refreshed on a timer instead."""
@@ -341,6 +383,20 @@ class Queue:
     def signature(self) -> tuple:
         """Ranked non-STABLE cards (see QueueItem.signature): a change here is pushed to /ws/live at once."""
         return tuple(it.signature() for it in self.items if it.tier != "STABLE")
+
+    def to_wire(self, clock: NightClock | None = None) -> dict:
+        """The /ws/live `queue` message (~34 KB for 120 residents, ~4 KB deflated; the slim REST cards are ~80 KB)."""
+        clock = clock or (self.items[0].clock if self.items else None)
+        return {
+            "type": "queue",
+            "as_of": _iso_s(self.as_of),
+            "display_time": clock.display(self.as_of).replace(microsecond=0).isoformat() if clock else None,
+            "night": clock.is_night(self.as_of) if clock else None,
+            "mode": sim_state.mode,
+            "eval_ms": round(self.total_ms),
+            "kpis": self.kpis(),
+            "items": [it.to_wire(spark=i < WIRE_SPARK_MIN or it.tier != "STABLE") for i, it in enumerate(self.items)],
+        }
 
     def to_dict(self, clock: NightClock | None = None, *, detail: bool = True) -> dict:
         clock = clock or (self.items[0].clock if self.items else None)
@@ -522,11 +578,11 @@ class Evaluator:
         return queue
 
     async def _publish(self, queue: Queue, clock: NightClock) -> None:
-        """Push the slim queue on /ws/live right away when a flagged card changed (who, tier, rule, order),
+        """Push the compact queue on /ws/live right away when a flagged card changed (who, tier, rule, order),
         otherwise refresh it every QUEUE_REFRESH_S (scores, factors, vitals, minutes since check)."""
         sig, now = queue.signature(), time.monotonic()
         changed = sig != self._sent_sig or now - self._sent_at >= QUEUE_REFRESH_S
-        await hub.publish_queue(queue.to_dict(clock, detail=False), broadcast=changed)
+        await hub.publish_queue(queue.to_wire(clock), broadcast=changed)
         if changed:
             self._sent_sig, self._sent_at = sig, now
 

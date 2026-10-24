@@ -21,6 +21,19 @@ def test_formula_weights() -> None:
     assert c.base_score == pytest.approx(100 * (0.15 + 0.10 + 0.03 + 0.072 + 0.02))
 
 
+def test_components_carry_points_for_the_ui() -> None:
+    d = Components(p_news=1.0, p_overdue=0.5).to_dict()
+    assert d["points"]["news"] == 30.0 and d["points"]["overdue"] == 4.0 and d["points"]["anom"] == 0.0
+    assert d["max_points"] == {
+        "news": 30.0,
+        "anom": 25.0,
+        "trend": 15.0,
+        "behav": 10.0,
+        "concern": 12.0,
+        "overdue": 8.0,
+    }
+
+
 def test_multi_signal_boost_and_cap() -> None:
     assert priority.combine_formula(Components(p_news=0.5, multi_signal=True)) == pytest.approx(25)
     full = Components(p_news=1, p_anom=1, p_trend=1, p_behav=1, p_concern=1, p_overdue=1, multi_signal=True)

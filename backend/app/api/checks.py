@@ -10,6 +10,7 @@ from app.api.deps import TigerConn, facility_tz
 from app.db import tiger
 from app.scoring import evaluator as ev
 from app.sim import facility as fac
+from app.ws.hub import hub, utc_now_iso
 
 router = APIRouter(prefix="/api", tags=["checks"])
 
@@ -35,10 +36,12 @@ async def log_check(body: CheckIn, conn: TigerConn) -> dict:
     await tiger.write_events(conn, [(now, body.resident_id, "check_logged", staff_id, payload)])
     if ev.evaluator is not None:
         ev.evaluator.poke()
-    return {
+    event = {
         "ts": datetime.fromtimestamp(now, UTC).isoformat(),
         "resident_id": body.resident_id,
         "type": "check_logged",
         "staff_id": staff_id,
         "payload": payload,
     }
+    await hub.broadcast({"type": "event", "ts": utc_now_iso(), "event": event})
+    return event

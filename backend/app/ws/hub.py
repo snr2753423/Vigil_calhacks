@@ -1,7 +1,8 @@
 """WebSocket hub for `/ws/live` (server → client: queue, readings, alerts, insights, sim state).
 
-Connection registry, a heartbeat every `heartbeat_interval_s`, and the evaluator's `queue` (when a card
-changes, else every 10 s; also sent to new clients right after `hello`) and `alert` messages.
+Connection registry, a heartbeat every `heartbeat_interval_s`, and the evaluator's compact `queue` (when a
+card changes, else every 10 s; also sent to new clients right after `hello`), `alert`, `sim`, `injection`,
+and `event` (a check or note logged from the UI) messages.
 """
 
 import asyncio

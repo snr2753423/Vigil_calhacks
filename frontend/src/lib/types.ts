@@ -1,0 +1,244 @@
+// Shapes of the backend's REST and /ws/live payloads (backend/app/api, backend/app/scoring/evaluator.py).
+
+export type Tier = "CRITICAL" | "HIGH" | "WATCH" | "STABLE";
+export type CodeStatus = "FULL" | "DNR" | "DNR-DNI" | "COMFORT";
+export type Unit = "East" | "West" | "Memory Care";
+export type FactorKind = "rule" | "vital" | "behavior" | "concern" | "overdue" | "device";
+
+export type SimState = {
+  mode: "live" | "replay";
+  paused: boolean;
+  force_night: boolean;
+  display_clock_offset_s: number;
+  force_night_since?: number | null;
+  simulated_band?: boolean;
+};
+
+export type WireRule = {
+  rule: string;
+  kind: "critical" | "fall_prevention" | "device";
+  text: string;
+  since: string | null;
+  held: boolean;
+  ack: boolean;
+};
+
+export type WireFactor = { text: string; kind: FactorKind };
+
+/** One resident in the compact /ws/live queue; rank = position in `items`. */
+export type WireCard = {
+  id: number;
+  score: number;
+  tier: Tier;
+  rule: WireRule | null;
+  device: string | null;
+  factors: WireFactor[];
+  last_check: string | null;
+  check_min: number | null;
+  suppressed: boolean;
+  in_bed: boolean | null;
+  worn: boolean | null;
+  hr: number | null;
+  rr: number | null;
+  spo2: number | null;
+  spark?: (number | null)[];
+};
+
+export type Kpis = {
+  tiers: Record<Tier, number>;
+  overdue_checks: number;
+  devices_offline: number;
+};
+
+export type QueueMessage = {
+  type: "queue";
+  as_of: string;
+  display_time: string | null;
+  night: boolean | null;
+  mode: "live" | "replay";
+  eval_ms: number;
+  kpis: Kpis;
+  items: WireCard[];
+};
+
+export type AlertMessage = {
+  type: "alert";
+  ts: string;
+  resident_id: number;
+  name: string;
+  room: string;
+  unit: Unit;
+  tier: Tier;
+  from_tier: Tier;
+  score: number;
+  rule: { rule: string; kind: string; text: string; since: string | null } | null;
+  new_rules: string[];
+  factors: string[];
+  sound: boolean;
+};
+
+export type EventType =
+  | "bed_exit"
+  | "bed_return"
+  | "fall_suspected"
+  | "check_logged"
+  | "note_added"
+  | "intake_logged"
+  | "spot_check"
+  | "device_offline"
+  | "device_online"
+  | "alert_raised"
+  | "alert_acknowledged"
+  | "alert_resolved";
+
+export type ResidentEvent = {
+  ts: string;
+  type: EventType;
+  staff_id: number | null;
+  payload: Record<string, unknown> | null;
+};
+
+/** A check or note just logged from the UI. */
+export type EventMessage = { type: "event"; ts: string; event: ResidentEvent & { resident_id: number } };
+
+export type InjectionMessage = {
+  type: "injection";
+  ts: string;
+  kind: string;
+  resident_id: number;
+  start: string;
+  end: string;
+  minutes: number;
+};
+
+/** GET /api/residents row. */
+export type RosterEntry = {
+  resident_id: number;
+  name: string;
+  age: number;
+  sex: "F" | "M";
+  room: string;
+  unit: Unit;
+  diagnoses: string[];
+  flags: string[];
+  morse: number;
+  mobility: "independent" | "1-assist" | "2-assist" | "bedbound";
+  cognition: "intact" | "mild" | "moderate" | "severe";
+  code_status: CodeStatus;
+  is_live: boolean;
+};
+
+export type ComponentKey = "news" | "anom" | "trend" | "behav" | "concern" | "overdue";
+
+export type Components = {
+  p_news: number;
+  p_anom: number;
+  p_trend: number;
+  p_behav: number;
+  p_concern: number;
+  p_overdue: number;
+  multi_signal: boolean;
+  anom_source: string;
+  news2_total: number;
+  anomalous_metrics: string[];
+  bed_exits: number;
+  restlessness: number;
+  still: number;
+  minutes_since_check: number | null;
+  /** Points each component adds to the score, and its maximum (100 × weight), from the backend. */
+  points: Record<ComponentKey, number>;
+  max_points: Record<ComponentKey, number>;
+};
+
+export type News2Param = { value: number | boolean; points: number };
+
+export type News2 = {
+  total: number;
+  params: Partial<Record<"rr" | "spo2" | "hr" | "sbp" | "temp" | "consciousness", News2Param>>;
+  missing: string[];
+  spo2_scale: 1 | 2;
+  forces_high: boolean;
+};
+
+export type DetailFactor = { key: string; text: string; points: number; kind: FactorKind };
+
+/** The full (REST) queue card for one resident, with the score breakdown. */
+export type CurrentScore = {
+  rank: number;
+  resident_id: number;
+  score: number;
+  tier: Tier;
+  score_tier: Tier;
+  rule: (WireRule & { acknowledged: boolean; score: number }) | null;
+  device: { rule: string; text: string } | null;
+  factors: DetailFactor[];
+  suppressed_until: string | null;
+  last_check_ts: string | null;
+  minutes_since_check: number | null;
+  in_bed: boolean | null;
+  worn: boolean | null;
+  latest: { hr: number | null; rr: number | null; spo2: number | null; ts: string | null };
+  components: Components;
+  news2: News2;
+  concern: { concern_level: string; confusion_change: string; source: string; summary: string } | null;
+};
+
+export type BlockStats = { p05: number; p50: number; p95: number };
+/** metric → 4-hour time-of-day block ("0"–"5") → percentiles. */
+export type VitalBaselines = Partial<Record<string, Partial<Record<string, BlockStats>>>>;
+
+export type Assessment = {
+  headline: string;
+  assessment: string;
+  possible_concerns: string[];
+  recommended_checks: string[];
+  escalation: string;
+  care_plan_citations: { section: string; quote: string }[];
+  confidence: "low" | "medium" | "high";
+  caveats: string;
+  source: "template" | "cortex";
+  model: string;
+};
+
+export type ResidentDetail = RosterEntry & {
+  medications: { name: string; dose: string; flags: string[] }[];
+  emergency_contact: { name: string; phone: string; relation: string } | null;
+  profile: Record<string, string | string[]> | null;
+  as_of: string;
+  baselines: {
+    tod_block_now: number;
+    vitals: VitalBaselines;
+    night_bed_exits_p95: number | null;
+    still_minutes_p95: number | null;
+  };
+  current: CurrentScore | null;
+  assessment: Assessment;
+  events: ResidentEvent[];
+};
+
+export type VitalMetric = "hr" | "rr" | "spo2" | "skin_temp" | "motion" | "in_bed";
+
+export type VitalsResponse = {
+  resident_id: number;
+  from: string;
+  to: string;
+  res: "1m" | "15m" | "1h";
+  ts: string[];
+  series: Partial<Record<VitalMetric, (number | null)[]>>;
+};
+
+export type StaffMember = {
+  staff_id: number;
+  name: string;
+  role: "RN" | "LPN" | "CNA";
+  shift: "day" | "evening" | "night";
+  unit: Unit | null;
+  on_duty: boolean;
+};
+
+export type SimStatus = {
+  sim: SimState;
+  live_sim: { phase: string; residents: number; last_tick: string | null; rows_written: number } | null;
+  injections: { kind: string; resident_id: number; start: string; end: string; minutes: number }[];
+  evaluator: { phase: string; cycles: number; last_ms: number; avg_ms: number; alerts_raised: number } | null;
+};

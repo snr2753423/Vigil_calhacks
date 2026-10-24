@@ -92,6 +92,17 @@ class LiveLoop:
         sim.scenarios = [*kept, scenario]  # rebind, so a step running in the worker thread keeps its list
         log.info("live: injected %s for R-%d until %s", scenario.kind, scenario.resident_id, fac.utc_iso(scenario.end))
 
+    def clear_injections(self) -> int:
+        """End every injected scenario now (admin reset); scripted cast scenarios stay."""
+        n = 0
+        for sim in self.sims.values():
+            kept = [s for s in sim.scenarios if not isinstance(s, Injected)]
+            n += len(sim.scenarios) - len(kept)
+            sim.scenarios = kept
+        if n:
+            log.info("live: cleared %d injected scenario(s)", n)
+        return n
+
     def injections(self) -> list[dict]:
         now = time.time()
         return [

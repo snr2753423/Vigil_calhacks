@@ -95,3 +95,17 @@ async def simulated_band(body: Toggle | None = None) -> dict:
     """Hardware fallback: simulate R-120's band and bed sensor in the live loop."""
     sim_state.simulated_band = (body or Toggle()).enabled
     return await _changed()
+
+
+@router.post("/reset")
+async def reset() -> dict:
+    """Back to the plain live demo: end all injected scenarios, unpause, night mode and display offset off,
+    simulated band off. Stored history is untouched (`make seed` regenerates it)."""
+    live = live_loop.live
+    cleared = live.clear_injections() if live else 0
+    sim_state.paused = False
+    sim_state.force_night = False
+    sim_state.force_night_since = None
+    sim_state.display_clock_offset_s = 0
+    sim_state.simulated_band = False
+    return {"sim": await _changed(), "injections_cleared": cleared}

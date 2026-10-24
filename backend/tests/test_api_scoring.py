@@ -46,6 +46,33 @@ def test_force_night_and_pause(client: TestClient, clean_sim_state) -> None:
     assert client.post("/api/sim/start").json()["paused"] is False
 
 
+def test_reset_clears_the_demo_flags(client: TestClient, clean_sim_state) -> None:
+    sim_state.paused, sim_state.force_night, sim_state.display_clock_offset_s = True, True, 600
+    body = client.post("/api/sim/reset").json()
+    assert body["injections_cleared"] == 0
+    assert not body["sim"]["paused"] and not body["sim"]["force_night"] and body["sim"]["display_clock_offset_s"] == 0
+
+
+def test_staff_on_duty(client: TestClient) -> None:
+    body = client.get("/api/staff").json()
+    on = [s for s in body["staff"] if s["on_duty"]]
+    assert body["shift"] in ("day", "evening", "night") and len(on) == 5
+    assert sorted(s["role"] for s in on) == ["CNA", "CNA", "CNA", "LPN", "RN"]
+
+
+def test_note_validation(client: TestClient) -> None:
+    app.dependency_overrides[tiger_conn] = lambda: None  # 422 must come from the body, not from Tiger
+    try:
+        _assert_note_422s(client)
+    finally:
+        app.dependency_overrides.pop(tiger_conn, None)
+
+
+def _assert_note_422s(client: TestClient) -> None:
+    assert client.post("/api/notes", json={"resident_id": 5, "text": ""}).status_code == 422
+    assert client.post("/api/notes", json={"resident_id": 5, "text": "ok", "author_role": "MD"}).status_code == 422
+
+
 def test_inject_needs_the_live_simulator(client: TestClient) -> None:
     r = client.post("/api/sim/inject", json={"kind": "fall", "resident_id": 5})
     assert r.status_code == 409  # tests run with SIM_LIVE_ENABLED=false
@@ -80,12 +107,25 @@ def test_paused_queue_stays_frozen(client: TestClient, fake_live) -> None:
     assert body["as_of"] == fake_live.latest.as_of.isoformat() and body["items"][0]["resident_id"] == 7
 
 
-def test_ws_queue_is_slim_and_rest_has_detail() -> None:
+def test_ws_queue_is_compact_and_rest_has_detail() -> None:
     q = _queue(NIGHT)
     slim, full = q.to_dict(detail=False)["items"][0], q.to_dict()["items"][0]
     assert {"components", "news2", "concern", "score_tier"} <= full.keys()
     assert not {"components", "news2", "concern", "score_tier"} & slim.keys()
     assert {"tier", "score", "factors", "rule", "hr_spark", "minutes_since_check"} <= slim.keys()
+    wire = q.to_wire()
+    card = wire["items"][0]
+    assert wire["type"] == "queue" and wire["kpis"]["tiers"]
+    assert {"id", "score", "tier", "rule", "device", "factors", "last_check", "check_min", "spark"} <= card.keys()
+    assert not {"name", "room", "components", "news2", "hr_spark"} & card.keys()  # profile comes from REST
+    assert all(f.keys() == {"text", "kind"} for f in card["factors"]) and isinstance(card["score"], int)
+
+
+def test_wire_sparklines_only_for_flagged_or_top_cards() -> None:
+    q = _queue(NIGHT, score=10.0)
+    q.items = q.items * (ev.WIRE_SPARK_MIN + 3)  # all STABLE
+    items = q.to_wire()["items"]
+    assert sum("spark" in it for it in items) == ev.WIRE_SPARK_MIN
 
 
 def test_queue_signature_ignores_vitals_but_not_tier() -> None:

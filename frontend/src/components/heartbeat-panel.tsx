@@ -4,18 +4,10 @@ import { Activity } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 
 import { HeartbeatChart } from "@/components/charts/heartbeat-chart";
+import { Stat } from "@/components/stat";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useNow } from "@/hooks/use-now";
 import { useLiveStore } from "@/store/live";
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-xs uppercase tracking-wide text-muted-foreground">{label}</dt>
-      <dd className="font-mono text-xl whitespace-nowrap tabular-nums">{value}</dd>
-    </div>
-  );
-}
 
 export function HeartbeatPanel() {
   const now = useNow();
@@ -50,10 +42,10 @@ export function HeartbeatPanel() {
       </CardHeader>
       <CardContent className="space-y-4">
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-          <Stat label="Heartbeat #" value={hb ? String(hb.seq) : "—"} />
-          <Stat label="Last seen" value={ageS === null ? "—" : `${ageS.toFixed(0)} s ago`} />
-          <Stat label="Server time (UTC)" value={hb ? hb.ts.slice(11, 19) : "—"} />
-          <Stat label="Viewers" value={hb ? String(hb.clients) : "—"} />
+          <Stat mono label="Heartbeat #" value={hb ? String(hb.seq) : "—"} />
+          <Stat mono label="Last seen" value={ageS === null ? "—" : `${ageS.toFixed(0)} s ago`} />
+          <Stat mono label="Server time (UTC)" value={hb ? hb.ts.slice(11, 19) : "—"} />
+          <Stat mono label="Viewers" value={hb ? String(hb.clients) : "—"} />
         </dl>
         <div>
           <p className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">

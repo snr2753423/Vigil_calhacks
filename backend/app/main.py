@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import checks, health, queue, residents, sim
+from app.api import checks, health, notes, queue, residents, sim, staff
 from app.config import get_settings
 from app.db import tiger
 from app.scoring import evaluator
@@ -47,5 +47,7 @@ app.include_router(health.router)
 app.include_router(queue.router)
 app.include_router(residents.router)
 app.include_router(checks.router)
+app.include_router(notes.router)
+app.include_router(staff.router)
 app.include_router(sim.router)
 app.include_router(hub.router)

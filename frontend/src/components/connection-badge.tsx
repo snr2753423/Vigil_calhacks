@@ -18,7 +18,7 @@ export function ConnectionBadge() {
   return (
     <Badge className={`h-7 gap-1.5 px-3 text-sm ${className}`} role="status" aria-live="polite">
       <Icon className={status === "connecting" ? "animate-spin" : undefined} aria-hidden />
-      {label}
+      <span className="sr-only sm:not-sr-only">{label}</span>
     </Badge>
   );
 }

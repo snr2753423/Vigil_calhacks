@@ -86,6 +86,45 @@ The layout follows SPEC §5. `backend/app/` holds `api/`, `ws/`, `db/` (`tiger.p
 
 ## Status
 
+**Phase 4 (core UI: Rounds Queue, resident detail, admin): done**
+
+What works:
+- **`/` Rounds Queue**, live over `/ws/live` with no page refresh.
+  - Header: facility, display clock (honours the force-night display offset; moon icon at night), Live/Replay badge, Paused badge, connection status, role switcher (CNA/LPN, Charge RN, DON; kept in localStorage), alert-sound toggle, staff on duty (`GET /api/staff`, wide screens).
+  - KPI strip: count per tier, overdue checks, device issues.
+  - Ranked cards for every non-STABLE resident: tier chip (icon + label + score), code status, rule banner, top-3 deterministic factor chips (icon per kind), 2 h HR sparkline (inline SVG), HR/RR/SpO₂, time since check (ticks each minute), in/out of bed, band off, "quiet after check", an AI-summary placeholder, **Open** and a **Mark checked** quick form (`POST /api/checks`). Cards glide to their new rank (FLIP via the Web Animations API, off under reduced motion). STABLE residents are one-line rows ("Show all").
+  - Floor grid: 120 rooms by unit, tier color + tier icon, CRITICAL rooms pulse (a static outline under reduced motion), a band icon for device issues, every room links to the resident.
+  - Toasts for HIGH/CRITICAL `alert` messages, with a chime for CRITICAL (Web Audio, unlocked on the first tap). HIGH toasts fade after 20 s. CRITICAL toasts stay until opened, dismissed, a check is logged for that resident, or they drop below HIGH.
+- **`/resident/[id]`** (ids 1–120 prerendered, `params` read inside Suspense):
+  - Header with a large code-status badge, live tier/score/rank, mobility, Morse, cognition, contact, diagnoses, flagged meds.
+  - Assessment card: the deterministic template (`app/deep/assess.py`, now part of `GET /api/residents/{id}` as `assessment`). It has the same JSON shape as the Phase 6 Cortex output: headline, assessment, "consider checking" checklist, escalation by code status + care-plan profile, citations (empty until Cortex Search), Refresh.
+  - ECharts stack with a shared crosshair, ranges 6 h / 24 h / 7 d from `vitals_1m` / `vitals_15m` / `vitals_1h`:
+    - HR and RR with the personal p05–p95 band for each 4-hour block.
+    - SpO₂ with the NEWS2 zones (scale 2 for COPD).
+    - Skin temperature as change vs usual.
+    - Movement bars and the in-bed strip.
+    - "— not equipped" when a metric has no data.
+  - "Why this score" bars for each §7d component, with the multi-signal, rule and NEWS2 floors explained.
+  - NEWS2 table; Log check; Add note (`POST /api/notes`, text only, a `note_added` event that the keyword concern fallback scores); 24 h events timeline in plain language.
+- **`/admin`**: pause/start, force night, "show the clock as HH:MM" (sets `display_clock_offset_s`), simulated band for R-120, the four scenario injectors with a resident picker and the active-scenario list, **Reset demo** (`POST /api/sim/reset`), and the `/ws/live` heartbeat panel.
+- **Backend additions:**
+  - `POST /api/notes`, `GET /api/staff`, `POST /api/sim/reset`.
+  - Checks and notes are broadcast as `event` messages on `/ws/live`, so open pages refresh.
+  - **Slimmer `/ws/live` queue:** `Queue.to_wire()` sends **~34 KB** per message, down from ~80 KB, or **~4 KB on the wire** with permessage-deflate (negotiated by uvicorn + browsers). It omits the profile fields, which come from `GET /api/residents` once, and the score breakdown, which comes from the resident fetch. Scores are rounded and timestamps are whole seconds. STABLE cards carry 1 factor, and sparklines go only to flagged cards plus the top 24. `GET /api/queue` is unchanged.
+- **Tests:** backend **227** passed (wire format, sparkline cap, reset, staff on duty, note validation, the assessment template). Frontend vitest **17** passed (toast stack rules, queue join + floor layout, baseline bands by facility block, SpO₂ zones, display-clock offset, event text). `make lint` is clean and `pnpm build` prerenders all 126 pages.
+
+Verified in the in-app browser against the running stack and real Tiger data:
+- The queue updates live. Clicking a card opens the resident page with every chart populated, e.g. Alvarez over 24 h: HR 66 → 92 between 22:00 and 03:45 (1-min max 98; the first reading over 100 is in the 03:45 bucket), then ~95–100 until 06:30 and up to ~120 around breakfast (07:45–08:30). RR rises 16 → 25 overnight and skin temp reaches +1.2 °C.
+- **Injected fall** (`/admin` → James Ortiz): about 38 s later Ortiz moved to **#1, CRITICAL 100** ("Suspected fall … then no movement"), with a toast. **Mark checked** on his card cleared it at the next cycle.
+- Phone (375 px) and iPad portrait (768 px): no horizontal scroll, single column with the floor grid below the cards. Two columns from ~1090 px (iPad landscape).
+
+Known issues and assumptions:
+- **Admin reset never touches the database** (AGENTS.md rule 8). It resets the demo controls and injected scenarios; re-seed with `make seed`.
+- The AI headline on queue cards is a placeholder until Phase 6. The resident page shows the deterministic template, labelled as such.
+- The alert chime needs one tap or keypress on the page first (browser autoplay rules).
+- SpO₂ is read every 5 min, so the 1-min chart joins readings across empty minutes. RR is shown only while in bed (gaps otherwise).
+- Charts refresh every 30 s (6 h), 2 min (24 h) and 10 min (7 d). The resident detail refreshes every 15 s and right after a check or note for that resident.
+
 **Phase 3 (scoring engine + queue API): done**
 
 What works:

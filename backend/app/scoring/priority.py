@@ -111,6 +111,9 @@ class Components:
         for k, v in d.items():
             if isinstance(v, float):
                 d[k] = round(v, 3)
+        # The UI's "why this score" bars: points per component and their maxima, so weights live only here.
+        d["points"] = {k: round(100 * w * getattr(self, f"p_{k}"), 2) for k, w in WEIGHTS.items()}
+        d["max_points"] = {k: round(100 * w, 2) for k, w in WEIGHTS.items()}
         return d
 
 
