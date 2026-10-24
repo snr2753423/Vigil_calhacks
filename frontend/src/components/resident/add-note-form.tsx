@@ -4,6 +4,7 @@ import { Check, Loader2, MessageSquarePlus } from "lucide-react";
 import { useState } from "react";
 
 import { postJSON } from "@/lib/api";
+import { useLiveStore } from "@/store/live";
 import { ROLES, usePrefs } from "@/store/prefs";
 
 /** Typed nurse note → POST /api/notes (a `note_added` event that feeds P_concern / NEWS2 consciousness). */
@@ -12,6 +13,7 @@ export function AddNoteForm({ residentId, onSaved }: { residentId: number; onSav
   const [text, setText] = useState("");
   const [state, setState] = useState<"idle" | "saving" | "done" | "error">("idle");
   const [error, setError] = useState("");
+  const replay = useLiveStore((s) => s.sim?.mode === "replay");
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,6 +29,17 @@ export function AddNoteForm({ residentId, onSaved }: { residentId: number; onSav
       setState("error");
     }
   };
+
+  if (replay) {
+    return (
+      <section className="space-y-1 rounded-2xl bg-card p-4 ring-1 ring-white/10">
+        <h2 className="flex items-center gap-2 text-xl font-semibold">
+          <MessageSquarePlus className="size-5" aria-hidden /> Add note
+        </h2>
+        <p className="text-base text-muted-foreground">Replay is read-only: notes are added in live mode.</p>
+      </section>
+    );
+  }
 
   return (
     <form onSubmit={submit} className="space-y-2 rounded-2xl bg-card p-4 ring-1 ring-white/10">

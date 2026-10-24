@@ -6,6 +6,8 @@ import type {
   InjectionMessage,
   InsightMessage,
   QueueMessage,
+  ReplayBrief,
+  ReplayMessage,
   SimState,
 } from "@/lib/types";
 
@@ -37,7 +39,8 @@ export type LiveMessage =
   | InjectionMessage
   | EventMessage
   | InsightMessage
-  | DeviceMessage;
+  | DeviceMessage
+  | ReplayMessage;
 
 /** An alert waiting in the toast stack. */
 export type ToastAlert = AlertMessage & { key: string; receivedAt: number };
@@ -64,6 +67,8 @@ export type LiveState = {
   devices: Record<string, DeviceMessage & { receivedAt: number }>;
   /** Live device heart rate per resident: [epoch ms, bpm], the last LIVE_HR_WINDOW_MS. */
   liveHr: Record<number, [number, number][]>;
+  /** While replaying: the newest cursor brief and when it arrived (the client runs the clock between steps). */
+  replay: (ReplayBrief & { receivedAt: number }) | null;
 };
 
 export const MAX_INTERVALS = 30;
@@ -84,6 +89,7 @@ export const initialLiveState: LiveState = {
   lastInsight: null,
   devices: {},
   liveHr: {},
+  replay: null,
 };
 
 const KNOWN_TYPES = new Set<LiveMessage["type"]>([
@@ -96,6 +102,7 @@ const KNOWN_TYPES = new Set<LiveMessage["type"]>([
   "event",
   "insight",
   "device",
+  "replay",
 ]);
 
 export function liveSocketUrl(
@@ -137,7 +144,7 @@ export function applyMessage(
 ): Partial<LiveState> {
   switch (msg.type) {
     case "hello":
-      return { sim: msg.sim, heartbeatIntervalS: msg.heartbeat_interval_s };
+      return { sim: msg.sim, heartbeatIntervalS: msg.heartbeat_interval_s, ...replayFromSim(state, msg.sim, receivedAt) };
     case "heartbeat": {
       const prev = state.lastHeartbeat;
       const consecutive = prev !== null && msg.seq === prev.seq + 1;
@@ -147,10 +154,20 @@ export function applyMessage(
         intervalsMs: consecutive
           ? [...state.intervalsMs, receivedAt - prev.receivedAt].slice(-MAX_INTERVALS)
           : state.intervalsMs,
+        ...replayFromSim(state, msg.sim, receivedAt),
       };
     }
-    case "sim":
-      return { sim: msg.sim };
+    case "sim": {
+      // Entering or leaving replay: toasts from the other timeline no longer apply.
+      const switched = (state.sim?.mode ?? "live") !== msg.sim.mode;
+      return { sim: msg.sim, ...replayFromSim(state, msg.sim, receivedAt), ...(switched ? { alerts: [] } : {}) };
+    }
+    case "replay": {
+      const { cursor, speed, playing, step_s, start, end } = msg;
+      const replay = { cursor, speed, playing, step_s, start, end, receivedAt };
+      // A seek jumps the timeline: toasts from before the jump are stale.
+      return msg.seeked ? { replay, alerts: [] } : { replay };
+    }
     case "queue": {
       // A toast for someone no longer HIGH/CRITICAL is stale: drop it.
       const flagged = new Set(msg.items.filter((c) => c.tier === "HIGH" || c.tier === "CRITICAL").map((c) => c.id));
@@ -185,6 +202,18 @@ export function applyMessage(
         : { lastEvent: msg };
     }
   }
+}
+
+/** Heartbeats and `sim` messages carry the replay brief too: keep the newer one (a step message may be fresher
+ *  than a heartbeat built a moment earlier), and drop it when the mode is live. */
+function replayFromSim(state: LiveState, sim: SimState, receivedAt: number): Partial<LiveState> {
+  if (sim.mode !== "replay" || !sim.replay) return state.replay === null ? {} : { replay: null };
+  const cur = state.replay;
+  if (cur && cur.cursor === sim.replay.cursor && cur.playing === sim.replay.playing && cur.speed === sim.replay.speed) {
+    return {};
+  }
+  if (cur && Date.parse(cur.cursor) > Date.parse(sim.replay.cursor) && cur.playing && sim.replay.playing) return {};
+  return { replay: { ...sim.replay, receivedAt } };
 }
 
 export function dismissAlert(state: LiveState, key: string): Partial<LiveState> {

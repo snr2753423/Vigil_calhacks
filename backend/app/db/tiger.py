@@ -12,7 +12,7 @@ import time
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -645,26 +645,51 @@ async def write_snapshots(conn: psycopg.AsyncConnection, rows: Iterable[Sequence
     )
 
 
-async def latest_snapshots(conn: psycopg.AsyncConnection, as_of: datetime, lookback_s: float = 600) -> list[dict]:
+SNAPSHOT_TABLES = ("priority_snapshots", "replay_snapshots")  # live scores · the replay prepare pass's
+
+
+async def upsert_replay_snapshots(conn: psycopg.AsyncConnection, rows: Sequence[Sequence]) -> int:
+    """(ts, resident_id, score, tier, factors list) → replay_snapshots, replacing a re-prepared step in place."""
+    if not rows:
+        return 0
+    ts, rid, score, tier, factors = (list(c) for c in zip(*rows, strict=True))
+    await execute(
+        conn,
+        """INSERT INTO replay_snapshots (ts, resident_id, score, tier, factors)
+           SELECT * FROM unnest(%s::timestamptz[], %s::int[], %s::real[], %s::text[], %s::jsonb[])
+           ON CONFLICT (resident_id, ts) DO UPDATE
+               SET score = excluded.score, tier = excluded.tier, factors = excluded.factors""",
+        (ts, rid, score, tier, [Jsonb(f) for f in factors]),
+    )
+    return len(rows)
+
+
+async def latest_snapshots(
+    conn: psycopg.AsyncConnection, as_of: datetime, lookback_s: float = 600, table: str = "priority_snapshots"
+) -> list[dict]:
+    assert table in SNAPSHOT_TABLES
     return await fetch_dicts(
         conn,
-        """SELECT DISTINCT ON (resident_id) resident_id, ts, score, tier, factors
-           FROM priority_snapshots
+        f"""SELECT DISTINCT ON (resident_id) resident_id, ts, score, tier, factors
+           FROM {table}
            WHERE ts > %(as_of)s - make_interval(secs => %(lookback)s) AND ts <= %(as_of)s
            ORDER BY resident_id, ts DESC""",
         {"as_of": as_of, "lookback": lookback_s},
     )
 
 
-async def snapshot_scores_before(conn: psycopg.AsyncConnection, points: Mapping[int, datetime]) -> dict[int, float]:
+async def snapshot_scores_before(
+    conn: psycopg.AsyncConnection, points: Mapping[int, datetime], table: str = "priority_snapshots"
+) -> dict[int, float]:
     """Score recorded just before each (resident, time), within 5 min — e.g. the score when a check was logged."""
     if not points:
         return {}
+    assert table in SNAPSHOT_TABLES
     rows = await fetchall(
         conn,
-        """SELECT DISTINCT ON (c.rid) c.rid, s.score
+        f"""SELECT DISTINCT ON (c.rid) c.rid, s.score
            FROM unnest(%s::int[], %s::timestamptz[]) AS c (rid, ts)
-           JOIN priority_snapshots s ON s.resident_id = c.rid AND s.ts <= c.ts AND s.ts > c.ts - INTERVAL '5 minutes'
+           JOIN {table} s ON s.resident_id = c.rid AND s.ts <= c.ts AND s.ts > c.ts - INTERVAL '5 minutes'
            ORDER BY c.rid, s.ts DESC""",
         (list(points), list(points.values())),
     )
@@ -827,6 +852,27 @@ async def insights_range(
     )
 
 
+async def add_snowflake_calls(conn: psycopg.AsyncConnection, deltas: Mapping[str, Any]) -> None:
+    """Add per-feature call counts (objects with calls / errors / total_ms) to the cumulative totals."""
+    rows = [(name, d.calls, d.errors, d.total_ms) for name, d in deltas.items() if d.calls]
+    if not rows:
+        return
+    async with conn.cursor() as cur:
+        await cur.executemany(
+            """INSERT INTO snowflake_calls (feature, calls, errors, total_ms) VALUES (%s, %s, %s, %s)
+               ON CONFLICT (feature) DO UPDATE SET calls = snowflake_calls.calls + excluded.calls,
+                   errors = snowflake_calls.errors + excluded.errors,
+                   total_ms = snowflake_calls.total_ms + excluded.total_ms, last_at = now()""",
+            rows,
+        )
+
+
+async def snowflake_call_totals(conn: psycopg.AsyncConnection) -> list[dict]:
+    return await fetch_dicts(
+        conn, "SELECT feature, calls, errors, total_ms, first_at, last_at FROM snowflake_calls ORDER BY feature"
+    )
+
+
 async def insight_counts(conn: psycopg.AsyncConnection) -> dict[str, dict]:
     rows = await fetch_dicts(
         conn,
@@ -834,3 +880,107 @@ async def insight_counts(conn: psycopg.AsyncConnection) -> dict[str, dict]:
                   max(as_of) AS last FROM ai_insights GROUP BY kind""",
     )
     return {r["kind"]: r for r in rows}
+
+
+# --------------------------------------------------------------------------- proof panel (SPEC §13)
+
+STATS_QUERIES: dict[str, str] = {
+    # Rows written in the last minute, by source (0 sim, 1 Polar band, 2 iPhone bed sensor).
+    "ingest": """SELECT source, count(*) AS n, max(ts) AS newest FROM vitals
+                 WHERE ts > now() - INTERVAL '60 seconds' GROUP BY source ORDER BY source""",
+    "rows": """SELECT approximate_row_count('vitals') AS vitals, approximate_row_count('events') AS events,
+                      approximate_row_count('priority_snapshots') AS priority_snapshots,
+                      approximate_row_count('vitals_1m') AS vitals_1m, approximate_row_count('vitals_15m') AS vitals_15m,
+                      approximate_row_count('vitals_1h') AS vitals_1h""",
+    "columnstore": """SELECT total_chunks, number_compressed_chunks, before_compression_total_bytes AS before_bytes,
+                             after_compression_total_bytes AS after_bytes, hypertable_size('vitals') AS size_bytes
+                      FROM hypertable_columnstore_stats('vitals')""",
+    "chunks": """SELECT hypertable_name, count(*) AS chunks, count(*) FILTER (WHERE is_compressed) AS compressed,
+                        min(range_start) AS oldest, max(range_end) AS newest
+                 FROM timescaledb_information.chunks GROUP BY 1 ORDER BY 1""",
+    "caggs": """SELECT view_name, materialized_only, materialization_hypertable_name
+                FROM timescaledb_information.continuous_aggregates ORDER BY view_name""",
+    "jobs": """SELECT j.job_id, j.proc_name, j.hypertable_name, j.schedule_interval::text AS schedule,
+                      s.last_run_status, s.last_successful_finish, s.next_start, s.total_runs, s.total_failures,
+                      extract(epoch FROM s.last_run_duration) * 1000 AS last_run_ms
+               FROM timescaledb_information.jobs j LEFT JOIN timescaledb_information.job_stats s USING (job_id)
+               WHERE j.proc_name <> 'policy_telemetry' AND j.proc_name <> 'policy_job_stat_history_retention'
+               ORDER BY j.job_id""",
+    "extensions": "SELECT extname, extversion FROM pg_extension WHERE extname LIKE 'timescale%' ORDER BY 1",
+    "server": "SELECT current_setting('server_version') AS postgres",
+}
+
+
+async def tiger_stats(conn: psycopg.AsyncConnection) -> dict[str, list[dict]]:
+    """Every proof query in one pipeline (one round trip), straight from the TimescaleDB catalog."""
+    cursors = {}
+    async with conn.pipeline():
+        for name, sql in STATS_QUERIES.items():
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(sql)
+            cursors[name] = cur
+    out = {}
+    for name, cur in cursors.items():
+        out[name] = await cur.fetchall()
+        await cur.close()
+    return out
+
+
+# "7-day hourly HR for all 120 residents", from raw rows vs the vitals_1h continuous aggregate. Both are wrapped
+# in one outer aggregate so each returns a single row: the timing is the database's work, not the transfer.
+BENCH_QUERIES: dict[str, dict[str, str]] = {
+    "hourly_hr": {
+        "raw": """SELECT count(*) AS rows, avg(hr)::real AS mean_hr FROM (
+                      SELECT resident_id, time_bucket(INTERVAL '1 hour', ts) AS bucket, avg(hr) AS hr
+                      FROM vitals WHERE ts > now() - INTERVAL '7 days' GROUP BY 1, 2) s""",
+        "vitals_1h": """SELECT count(*) AS rows, avg(hr)::real AS mean_hr FROM (
+                            SELECT resident_id, bucket, hr_avg AS hr
+                            FROM vitals_1h WHERE bucket > now() - INTERVAL '7 days') s""",
+    },
+}
+BENCH_TIMEOUT_MS = 60_000
+
+
+async def run_bench(conn: psycopg.AsyncConnection, name: str) -> dict[str, dict]:
+    """Time each variant of a benchmark (wall clock from this backend, one round trip each)."""
+    out = {}
+    async with conn.transaction():
+        await execute(conn, f"SET LOCAL statement_timeout = {BENCH_TIMEOUT_MS}")
+        for variant, sql in BENCH_QUERIES[name].items():
+            t0 = time.perf_counter()
+            row = (await fetch_dicts(conn, sql))[0]
+            out[variant] = {"ms": round((time.perf_counter() - t0) * 1000, 1), **row}
+    return out
+
+
+# Fixed-threshold alarms a conventional monitor would raise (SPEC §13): HR > 100 or < 50, RR > 24 or < 10,
+# SpO₂ < 90, any bed exit. Abnormal readings less than `merge` apart are one alarm (a monitor re-alarms only after
+# the reading has been back in range for a while), so this is a conservative count.
+FIXED_ALARMS_SQL = """
+    WITH v AS (
+        SELECT resident_id, ts, hr, rr, spo2 FROM vitals WHERE ts >= %(start)s AND ts < %(end)s
+    ), f AS (
+        SELECT resident_id, ts, 'hr_high' AS kind FROM v WHERE hr > 100
+        UNION ALL SELECT resident_id, ts, 'hr_low' FROM v WHERE hr < 50
+        UNION ALL SELECT resident_id, ts, 'rr_high' FROM v WHERE rr > 24
+        UNION ALL SELECT resident_id, ts, 'rr_low' FROM v WHERE rr < 10
+        UNION ALL SELECT resident_id, ts, 'spo2_low' FROM v WHERE spo2 < 90
+        UNION ALL SELECT resident_id, ts, 'bed_exit' FROM events
+                  WHERE type = 'bed_exit' AND ts >= %(start)s AND ts < %(end)s
+    ), e AS (
+        SELECT resident_id, kind, ts,
+               ts - lag(ts) OVER (PARTITION BY resident_id, kind ORDER BY ts) AS gap
+        FROM f
+    )
+    SELECT resident_id, kind, count(*) AS alarms, min(ts) AS first_ts
+    FROM e
+    WHERE gap IS NULL OR gap > %(merge)s OR kind = 'bed_exit'
+    GROUP BY 1, 2 ORDER BY 1, 2
+"""
+
+
+async def fixed_threshold_alarms(
+    conn: psycopg.AsyncConnection, start: datetime, end: datetime, merge: timedelta
+) -> list[dict]:
+    """Per (resident, kind): how many fixed-threshold alarms in [start, end) and when the first one fired."""
+    return await fetch_dicts(conn, FIXED_ALARMS_SQL, {"start": start, "end": end, "merge": merge})

@@ -32,6 +32,14 @@ async def tiger_conn() -> AsyncIterator[psycopg.AsyncConnection]:
 TigerConn = Annotated[psycopg.AsyncConnection, Depends(tiger_conn)]
 
 
+def refuse_in_replay(what: str) -> None:
+    """Writes stamped "now" make no sense while the UI shows last night: say so instead of storing them."""
+    from app.state import sim_state
+
+    if sim_state.mode == "replay":
+        raise HTTPException(409, f"Replay is read-only: switch back to live to {what}.")
+
+
 def parse_ts(value: str | None, name: str = "as_of") -> datetime | None:
     """ISO 8601 → aware UTC datetime. A value without an offset is taken as UTC. Future times are refused."""
     if value is None or value == "":

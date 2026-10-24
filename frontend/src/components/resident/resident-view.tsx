@@ -47,7 +47,7 @@ export function ResidentView({ id }: { id: number }) {
       <ResidentHeader r={data} tier={tier} score={score} rank={live?.rank ?? cur?.rank ?? null} />
       <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-4 lg:grid-cols-[minmax(0,1fr)_26rem]">
         <div className="min-w-0 space-y-4">
-          <AssessmentCard a={data.assessment} asOf={data.as_of} onRefresh={refresh} refreshing={refreshing} />
+          <AssessmentCard a={data.assessment} asOf={data.as_of} onRefresh={refresh} refreshing={refreshing} replay={!!data.replay} />
           <VitalsCharts
             residentId={id}
             baselines={data.baselines.vitals}

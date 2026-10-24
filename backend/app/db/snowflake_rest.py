@@ -267,6 +267,17 @@ class SnowflakeRest:
         self, statement: str, params: list[Any] | None = None, *, feature: str = "sql_api", timeout: float = 30.0
     ) -> list[list[Any]]:
         """Run one statement through POST /api/v2/statements (synchronous; rows as strings)."""
+        return (await self._statement(statement, params, feature=feature, timeout=timeout)).get("data") or []
+
+    async def sql_dicts(
+        self, statement: str, params: list[Any] | None = None, *, feature: str = "sql_api", timeout: float = 30.0
+    ) -> list[dict[str, Any]]:
+        """Like `sql`, with rows keyed by column name (from resultSetMetaData; handy for SHOW commands)."""
+        body = await self._statement(statement, params, feature=feature, timeout=timeout)
+        cols = [c.get("name") for c in (body.get("resultSetMetaData") or {}).get("rowType") or []]
+        return [dict(zip(cols, row, strict=False)) for row in body.get("data") or []]
+
+    async def _statement(self, statement: str, params: list[Any] | None, *, feature: str, timeout: float) -> dict:
         s = self.settings
         body: dict[str, Any] = {
             "statement": statement,
@@ -280,7 +291,7 @@ class SnowflakeRest:
         resp = await self._post("/api/v2/statements", body, feature=feature, timeout=timeout + 2)
         if resp.status_code == 202:  # still running past the API's synchronous window
             raise SnowflakeRestError(202, "statement did not finish in time")
-        return resp.json().get("data") or []
+        return resp.json()
 
     # ---- Cortex Search
 

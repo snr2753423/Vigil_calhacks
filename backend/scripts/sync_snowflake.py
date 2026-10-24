@@ -61,7 +61,10 @@ def main() -> int:
         print("sf-load: Tiger and Snowflake must both be configured in .env", file=sys.stderr)
         return 1
     try:
-        asyncio.run(run(args.once))
+        try:
+            asyncio.run(run(args.once))
+        finally:
+            asyncio.run(sync.flush_calls())  # → Tiger snowflake_calls (/under-the-hood)
     except Exception as exc:
         print(f"sf-load: FAILED — {exc}", file=sys.stderr)
         return 1

@@ -16,6 +16,7 @@ class SimState:
     display_clock_offset_s: int = 0
     force_night_since: float | None = None  # epoch s when force_night was switched on
     simulated_band: bool = False  # fallback: simulate R-120 in live mode instead of the Polar band + iPhone
+    replay: dict | None = None  # while replaying: cursor, speed, playing, step (app/sim/replay.py)
 
     def to_dict(self) -> dict:
         return asdict(self)

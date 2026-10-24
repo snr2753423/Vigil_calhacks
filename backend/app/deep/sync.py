@@ -361,6 +361,43 @@ class SyncLoop:
             await tiger.unlock_sync(tconn)
 
 
+# --------------------------------------------------------------------------- cumulative call counts
+
+FLUSH_INTERVAL_S = 30.0
+
+
+async def flush_calls(conn: psycopg.AsyncConnection | None = None) -> None:
+    """Add this process's Snowflake calls since the last flush to Tiger `snowflake_calls`. Never raises: the
+    counts go back into the buffer and out with the next flush."""
+    pending = sf.call_stats.drain()
+    if not any(s.calls for s in pending.values()):
+        return
+    try:
+        if conn is not None:
+            await tiger.add_snowflake_calls(conn, pending)
+        else:
+            async with tiger.connect(application_name="vigil-stats") as c:
+                await tiger.add_snowflake_calls(c, pending)
+    except Exception as exc:
+        sf.call_stats.restore(pending)
+        log.warning("stats: could not store Snowflake call counts: %s", " ".join(str(exc).split())[:160])
+
+
+async def flush_loop() -> None:
+    try:
+        while True:
+            await asyncio.sleep(FLUSH_INTERVAL_S)
+            try:
+                async with tiger.pooled() as conn:
+                    await flush_calls(conn)
+            except Exception as exc:  # Tiger unreachable: the counts stay buffered for the next flush
+                log.warning("stats: flush skipped: %s", " ".join(str(exc).split())[:160] or type(exc).__name__)
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(flush_calls(), 3.0)  # the last calls before a restart
+        raise
+
+
 loop: SyncLoop | None = None
 
 

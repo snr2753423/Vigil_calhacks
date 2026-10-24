@@ -154,10 +154,10 @@ def test_headline_respects_as_of_and_age() -> None:
 
 
 def test_explain_falls_back_on_error_and_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def boom(self, rid, as_of, trigger):
+    async def boom(self, rid, as_of, trigger, current=None):
         raise ConnectionError("network down")
 
-    async def slow(self, rid, as_of, trigger):
+    async def slow(self, rid, as_of, trigger, current=None):
         await asyncio.sleep(5)
         return {"headline": "late"}
 

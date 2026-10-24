@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useReplayCursor } from "@/hooks/use-clock";
 import { getJSON, postJSON } from "@/lib/api";
 import type { Assessment, ResidentDetail } from "@/lib/types";
 import { useLiveStore } from "@/store/live";
 
 const REFRESH_MS = 15_000;
+const REPLAY_RELOAD_MS = 2_500; // during a replay: follow the cursor, at most this often
 const ASSESS_WAIT_MS = 60_000; // give up showing "updating" if no Cortex result arrives by then
 
 /** GET /api/residents/{id} (profile, baselines, full score breakdown, 24 h events, AI card), refreshed every
@@ -85,6 +87,19 @@ export function useResident(id: number) {
       return () => clearTimeout(t);
     }
   }, [lastEvent, id, load]);
+
+  // Replay: the backend scores this resident at the cursor; reload as the cursor moves (throttled).
+  const cursor = useReplayCursor();
+  const lastReplayLoad = useRef(0);
+  useEffect(() => {
+    if (cursor === null) return;
+    const wait = Math.max(0, lastReplayLoad.current + REPLAY_RELOAD_MS - Date.now());
+    const t = setTimeout(() => {
+      lastReplayLoad.current = Date.now();
+      void load();
+    }, wait);
+    return () => clearTimeout(t);
+  }, [cursor, load]);
 
   const lastInsight = useLiveStore((s) => s.lastInsight);
   useEffect(() => {

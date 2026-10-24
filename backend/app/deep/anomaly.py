@@ -60,6 +60,7 @@ MAX_PENDING = timedelta(hours=6)  # the background loop never re-detects more th
 # the end of the training data); results for the lead-in are discarded.
 CONTEXT = timedelta(hours=24)
 META_KEY = "anomaly_models"
+LAST_RUN_KEY = "anomaly_last_run"
 
 
 # --------------------------------------------------------------------------- severity (pure)
@@ -293,6 +294,11 @@ async def detect_range(
     stats.phase = "error" if det.errors else "idle"
     if det.errors:
         log.warning("anomaly: %s", stats.last_error)
+    # Kept in Tiger so /under-the-hood shows the newest run from any process (backend, `make detect`, prepare).
+    last = {k: v for k, v in stats.to_dict().items() if k != "runs"} | {
+        "residents": len({r["resident_id"] for r in det.results})
+    }
+    await tiger.set_meta(tconn, LAST_RUN_KEY, last)
     return det
 
 

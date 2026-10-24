@@ -13,6 +13,7 @@ import { TierChip } from "@/components/tier-chip";
 import { facilityHHMM, formatMinutes } from "@/lib/format";
 import type { QueueRow } from "@/lib/queue";
 import { TIERS } from "@/lib/tiers";
+import { useLiveStore } from "@/store/live";
 
 type Props = { row: QueueRow; minutesSinceCheck: number | null };
 
@@ -21,6 +22,7 @@ export const ResidentCard = memo(function ResidentCard({ row, minutesSinceCheck 
   const r = row.resident;
   const name = r?.name ?? `Resident ${row.id}`;
   const t = TIERS[row.tier];
+  const replay = useLiveStore((s) => s.sim?.mode === "replay");
   return (
     <article
       data-flip={row.id}
@@ -112,7 +114,7 @@ export const ResidentCard = memo(function ResidentCard({ row, minutesSinceCheck 
         (row.tier === "HIGH" || row.tier === "CRITICAL") && (
           <p className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
             <Sparkles className="size-4 shrink-0" aria-hidden />
-            <span>AI summary pending · Snowflake Cortex</span>
+            <span>{replay ? "No prepared AI card for this moment" : "AI summary pending · Snowflake Cortex"}</span>
           </p>
         )
       )}

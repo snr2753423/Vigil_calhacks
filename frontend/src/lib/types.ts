@@ -12,7 +12,22 @@ export type SimState = {
   display_clock_offset_s: number;
   force_night_since?: number | null;
   simulated_band?: boolean;
+  /** While replaying: the cursor and playback (backend app/sim/replay.py). */
+  replay?: ReplayBrief | null;
 };
+
+/** Replay cursor and playback, in heartbeats / `sim` messages and each `replay` step message. */
+export type ReplayBrief = {
+  cursor: string;
+  speed: number;
+  playing: boolean;
+  step_s: number;
+  start: string;
+  end: string;
+};
+
+/** /ws/live: one replay step (or a seek / pause / speed change). */
+export type ReplayMessage = ReplayBrief & { type: "replay"; ts: string; seeked: boolean };
 
 export type WireRule = {
   rule: string;
@@ -287,6 +302,8 @@ export type ResidentDetail = RosterEntry & {
   current: CurrentScore | null;
   assessment: Assessment;
   events: ResidentEvent[];
+  /** Scored at the replay cursor (read-only: no Cortex refresh, no checks or notes). */
+  replay?: boolean;
 };
 
 export type VitalMetric = "hr" | "rr" | "spo2" | "skin_temp" | "motion" | "in_bed";
@@ -337,4 +354,178 @@ export type SimStatus = {
   live_sim: { phase: string; residents: number; last_tick: string | null; rows_written: number } | null;
   injections: { kind: string; resident_id: number; start: string; end: string; minutes: number }[];
   evaluator: { phase: string; cycles: number; last_ms: number; avg_ms: number; alerts_raised: number } | null;
+};
+
+// ------------------------------------------------------------------ replay (GET /api/replay)
+
+export type Bookmark = { ts: string; resident_id: number; label: string };
+
+export type PrepareProgress = {
+  phase: "idle" | "detecting" | "scoring" | "forecasting" | "assessing" | "done" | "error";
+  started_at: string | null;
+  finished_at: string | null;
+  step: number;
+  total: number;
+  message: string;
+  error: string | null;
+  running: boolean;
+};
+
+export type PreparedSummary = {
+  prepared_at: string;
+  seconds: number;
+  step_s: number;
+  detection: { ran: boolean; reason?: string; results?: number; seconds?: number; resident_buckets?: number; flagged_buckets?: number };
+  gated: { steps: number; avg_ms: number; snapshots: number; alerts: number };
+  assessments_summary: { planned: number; cortex: number; cached: number; failed: number };
+  forecasts: { status: string; requested: number; stored: number };
+};
+
+export type ReplayStatus = {
+  active: boolean;
+  cursor: string | null;
+  speed: number;
+  speeds: number[];
+  playing: boolean;
+  step_s: number;
+  at_end: boolean;
+  night: { date: string; start: string; end: string } | null;
+  bookmarks: Bookmark[];
+  prepared: PreparedSummary | null;
+  cards: number;
+  stats: { steps: number; last_ms: number; avg_ms: number; max_ms: number; behind: number; last_error: string | null };
+  prepare: PrepareProgress;
+};
+
+// ------------------------------------------------------------------ /under-the-hood (GET /api/stats/*)
+
+export type TigerStats = {
+  ok: boolean;
+  error?: string;
+  query_ms: number;
+  versions: Record<string, string>;
+  ingest: {
+    rows_last_60s: number;
+    rows_per_s: number;
+    by_source: { source: string; rows: number; newest: string }[];
+    live_loop: { phase: string; rows_written: number } | null;
+    devices: { rows_written: number; flushes: number; last_flush_ms: number | null } | null;
+  };
+  rows: Record<"vitals" | "events" | "priority_snapshots" | "vitals_1m" | "vitals_15m" | "vitals_1h", number> | null;
+  compression: {
+    chunks: number | null;
+    compressed_chunks: number | null;
+    before_bytes: number;
+    after_bytes: number;
+    ratio: number | null;
+    hypertable_bytes: number | null;
+  };
+  chunks: { hypertable_name: string; chunks: number; compressed: number; oldest: string; newest: string }[];
+  caggs: { view_name: string; materialized_only: boolean; materialization_hypertable_name: string }[];
+  jobs: {
+    job_id: number;
+    proc_name: string;
+    hypertable_name: string | null;
+    schedule: string;
+    last_run_status: string | null;
+    last_successful_finish: string | null;
+    next_start: string | null;
+    total_runs: number | null;
+    total_failures: number | null;
+    last_run_ms: number | null;
+  }[];
+};
+
+export type BenchResult = {
+  name: string;
+  title: string;
+  results: Record<"raw" | "vitals_1h", { ms: number; rows: number; mean_hr: number | null }>;
+  speedup: number | null;
+  total_ms: number;
+  sql: Record<string, string>;
+};
+
+export type SurfaceFeature = {
+  feature: string;
+  what: string;
+  calls: number;
+  errors: number;
+  avg_ms: number | null;
+  process_calls: number;
+  process_avg_ms: number | null;
+};
+
+export type ApiSurface = {
+  key: string;
+  label: string;
+  endpoint: string;
+  features: SurfaceFeature[];
+  calls: number;
+  errors: number;
+  process_calls: number;
+};
+
+export type SnowflakeStats = {
+  configured: boolean;
+  model: string;
+  totals: { calls: number; errors: number };
+  cumulative: { since: string | null; calls: number; errors: number } | null;
+  surfaces: ApiSurface[] | null;
+  sync: { phase: string; last_sync: string | null; last_ms: number | null };
+  sync_state: Record<string, { watermark: string | null; rows_synced: number; updated_at: string }> | null;
+  models: { train_from: string; train_to: string; trained_at: string; days: number } | null;
+  last_detection: {
+    last_run: string | null;
+    last_range: string[] | null;
+    last_seconds: number;
+    last_seconds_by_metric: Record<string, number>;
+    last_rows: number;
+    last_flagged: number;
+    residents?: number;
+  } | null;
+  assessments: { completed: number; avg_ms: number | null };
+  rest: { inference_endpoint: string; last_error: string | null };
+  inventory: {
+    ms?: number;
+    cached?: boolean;
+    models?: { name: string; created_on: string }[];
+    search_services?: { name: string; indexing_state?: string; serving_state?: string; source_data_num_rows?: string }[];
+    counts?: Record<string, number | string | null>;
+    errors: string[];
+  } | null;
+  tiger_error?: string;
+};
+
+export type OutcomeStats = {
+  prepared: boolean;
+  message?: string;
+  error?: string;
+  query_ms?: number;
+  night?: { date: string; start: string; end: string };
+  rules?: { merge_minutes: number; fixed: string[] };
+  fixed?: {
+    total: number;
+    vital_signs: number;
+    bed_exits: number;
+    residents: number;
+    by_kind: { kind: string; label: string; alarms: number }[];
+  };
+  vigil?: { total: number; residents: number; by_tier: Record<string, number>; rule_alerts: number; score_alerts: number };
+  cast?: { resident_id: number; fixed: number; vigil: number }[];
+  alvarez?: {
+    vigil_watch: string | null;
+    vigil_high: string | null;
+    vigil_number_one: string | null;
+    scheduled_round: string | null;
+    round_check: string | null;
+    first_fixed_vital: string | null;
+    first_fixed_vital_kind: string | null;
+    first_fixed_any: string | null;
+    fixed_alarms: number;
+    fixed_bed_exit_alarms: number;
+    lead_vs_round_min: number | null;
+    lead_vs_fixed_min: number | null;
+    alerts: { ts: string; tier: Tier; from_tier: Tier; score: number; rank: number }[];
+    notes: { ts: string; text: string }[];
+  };
 };

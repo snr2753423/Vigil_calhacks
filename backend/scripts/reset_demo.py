@@ -14,6 +14,7 @@ HISTORY_TABLES = (
     "vitals",
     "events",
     "priority_snapshots",
+    "replay_snapshots",
     "resident_baselines",
     "ai_insights",
     "sync_state",

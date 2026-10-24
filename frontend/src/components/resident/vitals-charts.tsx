@@ -19,6 +19,7 @@ import {
   ZONE,
 } from "@/lib/chart-options";
 import type { AnomalyBucket, AnomalyResponse, VitalBaselines, VitalsResponse } from "@/lib/types";
+import { useReplayCursor } from "@/hooks/use-clock";
 import { useNow } from "@/hooks/use-now";
 import { useLiveStore } from "@/store/live";
 import {
@@ -34,6 +35,8 @@ import {
 } from "@/lib/vitals";
 
 const METRICS = "hr,rr,spo2,skin_temp,motion,in_bed";
+// During a replay the charts end at the cursor and reload as it moves, in steps of this much replay time.
+const REPLAY_RELOAD_STEP_MS: Record<RangeKey, number> = { "6h": 4 * 60_000, "24h": 15 * 60_000, "7d": 60 * 60_000 };
 
 type Props = { residentId: number; baselines: VitalBaselines; copd: boolean; pronoun: string };
 
@@ -50,16 +53,25 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const cursor = useReplayCursor();
+  const step = REPLAY_RELOAD_STEP_MS[range];
+  const replayEnd = cursor === null ? null : Math.ceil(cursor / step) * step;
   useEffect(() => {
     const r = RANGES[range];
     const ctrl = new AbortController();
     const load = async () => {
       setLoading(true);
-      // No `to`: the backend uses its own now, so a fast device clock can't send a "future" timestamp.
-      const from = new Date(Date.now() - r.ms);
+      // Live: no `to`, the backend uses its own now, so a fast device clock can't send a "future" timestamp.
+      // Replay: everything ends at the cursor (rounded up to the reload step), so nothing after it shows.
+      const from = new Date((replayEnd ?? Date.now()) - r.ms);
       const q = new URLSearchParams({ metrics: METRICS, from: from.toISOString(), res: r.res });
       // Snowflake overlay (cached in Tiger): optional — the charts never wait on it or fail because of it.
       const aq = new URLSearchParams({ kind: "anomaly", from: from.toISOString() });
+      if (replayEnd !== null) {
+        const to = new Date(Math.min(replayEnd, cursor ?? replayEnd)).toISOString();
+        q.set("to", to);
+        aq.set("to", to);
+      }
       const overlay = getJSON<AnomalyResponse>(`/api/insights/${residentId}?${aq}`, ctrl.signal)
         .then((r) => r.items)
         .catch(() => null);
@@ -77,12 +89,14 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
       if (!ctrl.signal.aborted && items) setAnomalies(items);
     };
     void load();
-    const t = setInterval(load, r.refreshMs);
+    const t = replayEnd === null ? setInterval(load, r.refreshMs) : undefined;
     return () => {
       clearInterval(t);
       ctrl.abort();
     };
-  }, [residentId, range]);
+    // `cursor` is read only for the replay's `to`; `replayEnd` (its rounded value) drives reloads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [residentId, range, replayEnd]);
 
   const charts = useMemo(() => {
     if (!data || data.ts.length < 2) return null;
@@ -104,7 +118,7 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
       v && a.length ? anomalyPoints(ts, v, a, m) : [];
     const flagged = a.filter((b) => b.anomalous.length > 0).length;
     // A live device (the presenter's Polar band) adds its 1-s readings after the last fetch.
-    const hr = longRange || !s.hr ? { ts, values: s.hr ?? [] } : appendLive(ts, s.hr, liveHr, fetchedAt);
+    const hr = longRange || !s.hr || replayEnd !== null ? { ts, values: s.hr ?? [] } : appendLive(ts, s.hr, liveHr, fetchedAt);
     const hrBand = baselineBand(hr.ts, baselines, "hr");
     const hrExp = a.length ? expectedBand(hr.ts, step, a, "hr") : undefined;
     return {
@@ -126,7 +140,7 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
       bed: hasData(s.in_bed) ? inBedOption({ ts, values: s.in_bed!, longRange, height: 70 }) : null,
       snowflake: { buckets: a.length, flagged, stepMin: Math.round(step / 60_000), bucketMin: BUCKET_MS / 60_000 },
     };
-  }, [data, anomalies, baselines, copd, range, liveHr, fetchedAt]);
+  }, [data, anomalies, baselines, copd, range, liveHr, fetchedAt, replayEnd]);
 
   const group = `resident-${residentId}`;
   const usual = <LegendSwatch color={BAND} label={`${pronoun} usual range (p05–p95)`} band />;
@@ -179,7 +193,7 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
             option={charts.hr}
             legend={
               <span className="flex flex-wrap gap-3">
-                {polar && now !== null && now - polar.receivedAt < 5000 && (
+                {polar && replayEnd === null && now !== null && now - polar.receivedAt < 5000 && (
                   <span className="flex items-center gap-1.5 text-sm font-medium text-rose-200">
                     <span className="size-2 animate-pulse rounded-full bg-rose-400" aria-hidden />
                     Polar live{typeof polar.hr === "number" ? ` · ${polar.hr} bpm` : ""}

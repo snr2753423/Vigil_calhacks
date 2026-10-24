@@ -197,7 +197,10 @@ def main() -> int:
     if not (settings.snowflake_configured and settings.tiger_configured):
         print("train: Tiger and Snowflake must both be configured in .env", file=sys.stderr)
         return 1
-    asyncio.run(run(args.days, not args.no_detect, not args.no_train))
+    try:
+        asyncio.run(run(args.days, not args.no_detect, not args.no_train))
+    finally:
+        asyncio.run(sync.flush_calls())  # → Tiger snowflake_calls (/under-the-hood)
     return 0
 
 

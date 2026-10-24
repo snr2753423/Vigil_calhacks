@@ -265,12 +265,13 @@ def test_quiet_night_for_everyone_else(roster) -> None:
 
 def test_bookmarks_are_in_the_scripted_night() -> None:
     marks = cast.bookmarks(NIGHT, TZ)
-    assert [m["label"] for m in marks][2] == "Alvarez reaches #1"
+    labels = [m["label"] for m in marks]
+    top = labels.index("Alvarez reaches #1")
     window = cast.scripted_window(NIGHT, TZ)
     for m in marks:
         t = datetime.fromisoformat(m["ts"]).timestamp()
         assert window["night_start"] <= t < window["night_end"]
-    local = datetime.fromisoformat(marks[2]["ts"]).astimezone(TZ)
+    local = datetime.fromisoformat(marks[top]["ts"]).astimezone(TZ)
     assert (local.hour, local.minute) == (2, 14)
 
 

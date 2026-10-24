@@ -7,7 +7,7 @@ import { cn } from "cn";
 
 import { ConnectionBadge } from "@/components/connection-badge";
 import { StaffOnDuty } from "@/components/staff-on-duty";
-import { useNow } from "@/hooks/use-now";
+import { useClock } from "@/hooks/use-clock";
 import { FACILITY_SHORT_NAME, formatFacilityClock } from "@/lib/facility";
 import { useLiveStore } from "@/store/live";
 import { ROLES, type Role, usePrefs } from "@/store/prefs";
@@ -15,16 +15,16 @@ import { ROLES, type Role, usePrefs } from "@/store/prefs";
 const NAV = [
   { href: "/", label: "Rounds" },
   { href: "/devices", label: "Devices" },
+  { href: "/under-the-hood", label: "Under the hood" },
   { href: "/admin", label: "Admin" },
 ];
 
 export function AppHeader() {
   const path = usePathname();
-  const now = useNow();
+  const { now, offsetS, replay } = useClock();
   const sim = useLiveStore((s) => s.sim);
   const night = useLiveStore((s) => s.queue?.night ?? false);
-  const clock = now === null ? "--:--:--" : formatFacilityClock(now, sim?.display_clock_offset_s);
-  const replay = sim?.mode === "replay";
+  const clock = now === null ? "--:--:--" : formatFacilityClock(now, offsetS);
   if (path.startsWith("/bed/")) return null; // the iPhone bed-sensor page is a standalone tool
 
   return (
@@ -58,8 +58,11 @@ export function AppHeader() {
           <ConnectionBadge />
           <RoleSwitcher />
           <SoundToggle />
-          <div className="flex items-center gap-1.5" title={sim?.force_night ? "Night mode forced for the demo" : undefined}>
-            {(night || sim?.force_night) && <Moon className="size-5 text-indigo-200" aria-label="Night" />}
+          <div
+            className="flex items-center gap-1.5"
+            title={replay ? "Replay time (last night)" : sim?.force_night ? "Night mode forced for the demo" : undefined}
+          >
+            {(night || (!replay && sim?.force_night)) && <Moon className="size-5 text-indigo-200" aria-label="Night" />}
             <time className="min-w-[6.2rem] text-right font-mono text-2xl tabular-nums" suppressHydrationWarning>
               {clock}
             </time>

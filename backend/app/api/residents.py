@@ -10,6 +10,7 @@ from app.deep.assess import get_assessor, template_assessment
 from app.scoring import evaluator as ev
 from app.scoring.baseline import Baselines, tod_block
 from app.scoring.priority import TIER_RANK
+from app.sim import replay
 
 router = APIRouter(prefix="/api/residents", tags=["residents"])
 
@@ -46,8 +47,9 @@ async def list_residents(conn: TigerConn) -> list[dict]:
                   code_status, is_live
            FROM residents ORDER BY resident_id""",
     )
+    cursor = replay.replay_cursor()
     for r in rows:
-        cur = ev.live_card(r["resident_id"])
+        cur = replay.get_engine().card(r["resident_id"]) if cursor else ev.live_card(r["resident_id"])
         r["current"] = None if cur is None else {k: cur[k] for k in ("rank", "score", "tier", "factors", "rule")}
     return rows
 
@@ -55,19 +57,23 @@ async def list_residents(conn: TigerConn) -> list[dict]:
 @router.get("/{resident_id}")
 async def get_resident(resident_id: int, conn: TigerConn, as_of: str | None = None) -> dict:
     """Profile, baselines, current score and the last 24 h of events. Without `as_of`: live (the evaluator's
-    latest entry). With `as_of`: everything as of that time (replay cursor), scored statelessly."""
+    latest entry), or during a replay the replay's entry at its cursor. With `as_of`: everything as of that
+    time, scored statelessly. A replay never asks Cortex: its card is the one prepared for that moment."""
     rows = await tiger.fetch_dicts(conn, "SELECT * FROM residents WHERE resident_id = %s", (resident_id,))
     if not rows:
         raise HTTPException(404, f"no resident {resident_id}")
     resident = rows[0]
     ts = parse_ts(as_of)
+    replay_card = None
+    if ts is None and (cursor := replay.replay_cursor()) is not None:
+        ts, replay_card = cursor, replay.get_engine().card(resident_id)
     at = ts or datetime.now(UTC)
     live = ev.evaluator
     baselines = live.ctx.baselines if live is not None and live.ctx is not None else None
     if baselines is None:
         baselines = Baselines(await tiger.load_baseline_rows(conn))
     behavior = baselines.behavior_for(resident_id)
-    current = await ev.current_for(conn, resident_id, at, live=ts is None)
+    current = replay_card or await ev.current_for(conn, resident_id, at, live=ts is None)
     events = await tiger.fetch_dicts(
         conn,
         """SELECT ts, type, staff_id, payload FROM events
@@ -78,6 +84,7 @@ async def get_resident(resident_id: int, conn: TigerConn, as_of: str | None = No
     return {
         **resident,
         "as_of": at.isoformat(),
+        "replay": replay_card is not None,
         "baselines": {
             "tod_block_now": tod_block(at, facility_tz()),
             "vitals": baselines.block_stats(resident_id),

@@ -109,6 +109,7 @@ The presenter is R-120 Thomas Grant. A Polar Verity Sense streams HR from the Ma
 | `make sf-load` | Re-run the Snowflake bulk load alone (empties `VIGIL.CORE` first) |
 | `make train` | Train the 5 Snowflake anomaly models (last night held out), detect since, summarize the cast |
 | `make detect` | Re-run Snowflake anomaly detection over last night (or `--from/--to`) and summarize |
+| `make prepare` | Prepare last night's replay (anomaly detection if needed, gated scoring pass, Cortex cards); same as /admin → Prepare replay |
 | `make care-plans` | Write the 120 care-plan PDFs, upload + `AI_PARSE_DOCUMENT` + chunk them in Snowflake, build Cortex Search (~10 min) |
 | `make test` | backend pytest + frontend vitest |
 | `make lint` | ruff + eslint + `tsc --noEmit` |
@@ -119,6 +120,62 @@ The presenter is R-120 Thomas Grant. A Polar Verity Sense streams HR from the Ma
 The layout follows SPEC §5. `backend/app/` holds `api/`, `ws/`, `db/` (`tiger.py`, `snowflake_sql.py`, `snowflake_rest.py`), `sim/`, `scoring/`, `deep/` and `devices/`. SQL lives in `backend/sql/{tiger,snowflake}` and scripts in `backend/scripts/`. `frontend/` is a Next.js App Router app. Modules for later phases are placeholders whose docstrings name the phase that fills them in.
 
 ## Status
+
+**Phase 8 (replay mode + Under the hood): done**
+
+What works:
+- **Replay** (`app/sim/replay.py`, `/api/replay/{start|pause|seek|speed|stop}`, `GET /api/replay`):
+  - A cursor over last night (22:00–06:30) at 30/60/120×. Every 2 min of replay time, the real evaluator scores all 120 residents `as_of` the cursor through its own AlertGate (hysteresis, persistence, suppression). At 60× that is one evaluation every 2 s, the live cadence.
+  - Steps lie on a fixed grid from 21:00. A seek (a time, "HH:MM", or a bookmark) snaps to the grid and seeds the gate from the `replay_snapshots` the prepare pass wrote, so a replay from any point shows the same tiers as one from the start.
+  - `/ws/live` carries the replay's queue, its `alert`s (toasts and the CRITICAL chime) and a `replay` message with the cursor each step. The header shows a **Replay** badge and the replay clock. A banner on every page says "Replaying last night's recorded data through the live pipeline." and has play/pause, speed, bookmarks and **Back to live**.
+  - Live keeps running underneath: the simulator writes, the live evaluator scores and stores, but only the replay is published. Back to live republishes the live queue at once.
+  - **Never calls Snowflake.** Anomaly results come from Tiger `ai_insights` (each stamped with when live would have known it). Queue headlines and the resident page's card are the prepared Cortex cards with `as_of ≤ cursor` (≤ 60 min old). Refresh is hidden and `POST /api/explain` answers from the cache. Checks and notes are refused (409) and shown read-only.
+  - The resident page and its charts follow the cursor: score breakdown, events and vitals all end at the replay time.
+- **Prepare replay** (`app/sim/prepare.py`, `make prepare`, `/admin` → Prepare replay with progress):
+  1. `ANOMALY_DETECTION` over the night (from 20:15) for all residents. Skipped when the night already has results from the current models, unless "re-run anomaly detection" is ticked.
+  2. The gated pass over the replay grid: 286 steps, upserting `replay_snapshots` (new table, `007_replay.sql`) and recording each resident's tier changes, every alert, and the cast's ranks.
+  3. The forecast hook `deep/forecast.prepare_replay_forecasts` gets every resident entering HIGH/CRITICAL (22 on this night). It is a no-op until Phase 9.
+  4. Cortex cards at every bookmark and every escalation into HIGH/CRITICAL. A score-driven escalation within 10 min of that resident's previous card shares it; a new rule always gets its own. Capped at 40. Cards already cached are kept unless "regenerate" is ticked.
+  
+  The summary is stored in `sim_meta.replay_prepared` for the current seed. Replay refuses to start without it ("Run Prepare replay first").
+- **Bookmarks** (`cast.BOOKMARKS`, read at runtime, so no re-seed is needed; SPEC §4 updated): 23:12 Alvarez first deviation (WATCH) · 01:30 Lee forecast warning · 01:34 Alvarez reaches HIGH · 02:14 Alvarez reaches #1 · 02:20 Alvarez confusion noted · 03:20 Patel immobility · 04:05 Ortiz fall.
+- **`/under-the-hood`**: every number comes from a query.
+  - **Tiger** (`GET /api/stats/tiger`, one pipelined round trip): ingest rows/s from the last minute by source; `approximate_row_count` for vitals, events, snapshots and the three caggs; `hypertable_columnstore_stats` (ratio, before/after); chunks; caggs with real-time aggregation; every job with `job_stats`.
+  - **Benchmark** (`POST /api/bench/hourly_hr`): 7-day hourly HR for all 120 residents, raw vs `vitals_1h`, timed back to back.
+  - **Snowflake** (`GET /api/stats/snowflake`): calls grouped by API surface (SQL REST API, Cortex Search REST, Cortex inference REST, Cortex Analyst REST, Python connector), with each feature's calls, errors and average latency. Totals are cumulative across processes: every process adds its counts to the new Tiger table `snowflake_calls` (`006_stats.sql`; the backend every 30 s, scripts on exit).
+    - An inventory is read from Snowflake itself through the SQL REST API: `SHOW SNOWFLAKE.ML.ANOMALY_DETECTION`, `SHOW CORTEX SEARCH SERVICES`, and counts of results, series, synced rows, assessments and care-plan chunks. It is cached 5 min, and a failure is retried after 1 min.
+    - The newest detection run is kept in `sim_meta.anomaly_last_run`.
+  - **Outcome** (`GET /api/stats/outcome`): fixed-threshold alarms over last night's raw readings (HR > 100/< 50, RR > 24/< 10, SpO₂ < 90, any bed exit; readings < 5 min apart are one alarm) vs the alerts the gated pass raised. Alvarez's lead time, the cast table and her notes.
+  - An SVG architecture diagram of the fast tier vs the deep tier.
+- **Tests**: backend **343** passed. New ones cover the grid and snapping, bookmarks, card reveal by `as_of`, the assessment plan (dedupe, rule exemption, cap), outcome metrics and lead times, call-count drain/restore and API surfaces, and the engine against a faked Tiger: needs prepare, seek seeds the gate, alerts on steps but not on seeks, speeds, no Cortex in replay, writes refused. Frontend **47** passed (replay clock, `replay` messages, toasts cleared on seek and on back to live). `make lint` is clean.
+
+Verified against the real accounts (`make dev`, in the in-app browser):
+- **Prepare replay from /admin** with "re-run anomaly detection": 544 s in total.
+  - Detection: 22,822 results and 511 flagged resident-buckets in 258 s (HR 200 s … movement 252 s).
+  - Gated pass: 286 steps at 363 ms each, 23 alerts, 34,320 snapshots.
+  - Cards: 28 planned, 27 generated by Cortex and 1 already cached, 0 failed.
+- **Play at 60× from 01:45** (snaps to 01:44, one step every 2 s):
+  - 01:44 Alvarez #1 HIGH 60 with her 01:34 card. Lee takes #1 at 01:56; she is back at #1 at 02:04, and Lee again at 02:10.
+  - **02:14: Alvarez #1 HIGH 63**, and her card switches to the prepared 02:14 Cortex card ("Rising HR/RR, low SpO2 overnight; check Rosa now").
+  - 02:18 WATCH (her 02:17 round check), 02:20 #1 WATCH 72 with the confusion-note card. This matches the prepare pass exactly.
+- **Bookmarks**: jumping back from 02:34 to "02:14 Alvarez reaches #1" gives #1 HIGH 63 and clears the stale toast. "04:05 Ortiz fall" at 120× (one step per second): 04:06 Ortiz CRITICAL 90 (unassisted exit), then 04:08 CRITICAL 100 (suspected fall) and Patel CRITICAL 100 (possibly unresponsive), with alerts.
+- **Resident page in replay** (`/resident/17` at 02:14): the prepared card is marked "Prepared before the replay", events and charts end at 02:14, and check/note are read-only. **Back to live** restores the live queue and wall clock at once.
+- **Under the hood**:
+  - Tiger: ingest 23.8 rows/s, 21.7 M vitals rows, compression 14.7× (2.17 GB → 151 MB), 9 of 12 chunks compressed. Benchmark: **7,617 ms raw vs 219 ms from `vitals_1h` (34.7×)**, 20,152 resident-hours, mean HR 70.5 bpm both ways.
+  - Snowflake: 5 models × 120 series, 58,062 anomaly results, 1,200 care-plan chunks for 120 residents, CARE_PLAN_SEARCH active. Calls since the counter table was created: SQL REST API 124, Cortex Search 44, inference REST 2 (both 403), connector 34.
+  - Outcome on the night: **904 fixed-threshold alarms** (492 HR < 50, mostly beta-blocker residents; 199 SpO₂ < 90; 177 bed exits) for 110 residents, vs **23 Vigil alerts** for 4 residents. Kim (COPD): 18 fixed alarms, 0 Vigil alerts.
+  - **Alvarez**: Vigil HIGH at 00:42, 1 h 18 min before her 02:00 round (which reached her at 02:17) and 3 h 20 min before the first fixed vital-sign alarm (RR > 24 at 04:02).
+
+Known issues and assumptions:
+- **Two Alvarez times are earlier than the bookmarks.** Her first WATCH on the night is a brief borderline one at 22:26 (score 36); the bookmark marks the sustained one at 23:12. Her first HIGH is a brief 00:42–00:50 (an SpO₂ dip); the bookmark marks the 01:34 one. Under the hood reports the first ones (22:26 WATCH, 00:42 HIGH), since those are when Vigil first flagged her.
+- **"#1 at 02:14" means taking #1 back from Lee.** Lee's NEWS2 floor holds him at exactly 60 from ~01:08, so he and Alvarez swap #1 between 01:34 and 02:14. She is #1 at 01:34–01:54, 02:04–02:08, and from 02:14 on.
+- **Replay time moves in 2-min steps.** The header clock runs smoothly between steps, but the queue changes once per step. Seeks snap to the grid (01:45 → 01:44, 04:05 → 04:04).
+- **Prepare deletes nothing** (AGENTS.md rule 8): replay steps are upserted into `replay_snapshots`, which only `make seed` (via `reset_demo.py`) truncates. While a prepare runs, the previous summary is marked in progress, so a failed run makes replay ask for Prepare again instead of trusting half-rewritten steps. The first Phase 8 prepare (before this change) also left one night of rows in `priority_snapshots`; they are harmless and go with the next seed.
+- Prepare reuses a card already cached for the same (resident, as_of): this run reused the Phase 6 02:14 Alvarez card. Tick "regenerate AI cards" to replace it.
+- **Cortex wording**: a few generated headlines are firmer than our guardrails ask, e.g. "infection likely". The prompt is unchanged from Phase 6; tighten it in Phase 9 if needed.
+- **Snowflake inventory waits behind detection.** While `ANOMALY_DETECTION` runs, the XSMALL warehouse queues the inventory query, so the panel shows the error and retries a minute later.
+- The fixed-alarm count is conservative: readings < 5 min apart count as one alarm. A real monitor re-alarming every reading would count far more.
+- Ingest by source shows the simulator only. The Polar band and iPhone appear once they stream (hardware still pending).
 
 **Phase 7 (live hardware: Polar band + iPhone bed sensor): done in code; real-hardware test pending**
 

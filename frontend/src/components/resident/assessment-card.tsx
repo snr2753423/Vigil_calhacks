@@ -6,16 +6,18 @@ import { useState } from "react";
 import { facilityHHMM } from "@/lib/format";
 import type { Assessment } from "@/lib/types";
 
-type Props = { a: Assessment; asOf: string; onRefresh: () => void; refreshing: boolean };
+/** `replay`: the card was prepared ahead for this replay moment; Refresh (a live Cortex call) is off. */
+type Props = { a: Assessment; asOf: string; onRefresh: () => void; refreshing: boolean; replay?: boolean };
 
 /** The AI assessment card: a Snowflake Cortex assessment with care-plan citations, or the deterministic
  *  template when none is fresh or Snowflake is slow/down (same shape, never blank). */
-export function AssessmentCard({ a, asOf, onRefresh, refreshing }: Props) {
+export function AssessmentCard(props: Props) {
+  const { a } = props;
   // Remount the checklist when a new assessment arrives so old ticks don't carry over to new checks.
-  return <AssessmentBody key={`${a.source}|${a.as_of ?? ""}|${a.headline}`} a={a} asOf={asOf} onRefresh={onRefresh} refreshing={refreshing} />;
+  return <AssessmentBody key={`${a.source}|${a.as_of ?? ""}|${a.headline}`} {...props} />;
 }
 
-function AssessmentBody({ a, asOf, onRefresh, refreshing }: Props) {
+function AssessmentBody({ a, asOf, onRefresh, refreshing, replay = false }: Props) {
   const [done, setDone] = useState<Set<number>>(new Set());
   const [showCites, setShowCites] = useState(false);
   const template = a.source === "template";
@@ -27,17 +29,23 @@ function AssessmentBody({ a, asOf, onRefresh, refreshing }: Props) {
         <h2 id="ai-heading" className="flex items-center gap-2 text-sm font-medium uppercase tracking-wide text-indigo-200">
           <Sparkles className="size-4" aria-hidden /> {template ? "Summary (template)" : "AI assessment"}
         </h2>
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={updating}
-          className="flex h-11 items-center gap-1.5 rounded-lg px-3 text-base text-muted-foreground ring-1 ring-white/10 hover:bg-white/5 disabled:opacity-70"
-        >
-          <RefreshCw className={`size-4 ${updating ? "animate-spin" : ""}`} aria-hidden /> Refresh
-        </button>
+        {replay ? (
+          <span className="rounded-lg px-3 py-2 text-sm text-violet-100 ring-1 ring-violet-300/30">
+            {template ? "No prepared card for this moment" : "Prepared before the replay"}
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={updating}
+            className="flex h-11 items-center gap-1.5 rounded-lg px-3 text-base text-muted-foreground ring-1 ring-white/10 hover:bg-white/5 disabled:opacity-70"
+          >
+            <RefreshCw className={`size-4 ${updating ? "animate-spin" : ""}`} aria-hidden /> Refresh
+          </button>
+        )}
       </div>
 
-      {updating && (
+      {updating && !replay && (
         <p role="status" className="flex items-center gap-2 text-sm text-indigo-100">
           <Loader2 className="size-4 animate-spin" aria-hidden /> Asking Snowflake Cortex for a new assessment…
         </p>

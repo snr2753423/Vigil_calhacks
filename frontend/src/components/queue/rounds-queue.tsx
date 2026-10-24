@@ -9,7 +9,7 @@ import { KpiStrip } from "@/components/queue/kpi-strip";
 import { ResidentCard } from "@/components/queue/resident-card";
 import { StableList } from "@/components/queue/stable-list";
 import { useFlip } from "@/hooks/use-flip";
-import { useNow } from "@/hooks/use-now";
+import { useClock } from "@/hooks/use-clock";
 import { facilityHHMM, minutesSince } from "@/lib/format";
 import { queueRows, type QueueRow, reuseRows, splitFlagged } from "@/lib/queue";
 import { useLiveStore } from "@/store/live";
@@ -18,7 +18,7 @@ export function RoundsQueue() {
   const { queue, roster, status, sim } = useLiveStore(
     useShallow((s) => ({ queue: s.queue, roster: s.roster, status: s.status, sim: s.sim })),
   );
-  const now = useNow();
+  const { now, offsetS } = useClock();
   const [rowCache] = useState(() => new Map<number, { sig: string; row: QueueRow }>());
   const rows = useMemo(() => reuseRows(rowCache, queueRows(queue, roster)), [queue, roster, rowCache]);
   const { flagged, stable } = useMemo(() => splitFlagged(rows), [rows]);
@@ -40,7 +40,8 @@ export function RoundsQueue() {
         </div>
         {queue && (
           <p className="text-sm text-muted-foreground" aria-live="off">
-            Scored {facilityHHMM(Date.parse(queue.as_of), sim?.display_clock_offset_s)} · {queue.eval_ms} ms
+            Scored {facilityHHMM(Date.parse(queue.as_of), offsetS)} · {queue.eval_ms} ms
+            {queue.mode === "replay" && " · replay"}
             {sim?.paused && " · paused"}
           </p>
         )}

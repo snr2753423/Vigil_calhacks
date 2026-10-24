@@ -650,13 +650,14 @@ class Assessor:
 
     # ---- requests
 
-    def request(self, rid: int, as_of: datetime | None, trigger: str) -> asyncio.Task:
-        """Start (or join) the assessment for this resident at this time. as_of None = live (now)."""
+    def request(self, rid: int, as_of: datetime | None, trigger: str, current: dict | None = None) -> asyncio.Task:
+        """Start (or join) the assessment for this resident at this time. as_of None = live (now). `current`: the
+        score card to explain (replay prepare passes its gated card); default: the live card or a stateless one."""
         key = _key(rid, as_of)
         task = self.inflight.get(key)
         if task is None or task.done():
             self.stats.requests += 1
-            task = asyncio.create_task(self._run_one(rid, as_of, trigger), name=f"assess-{rid}")
+            task = asyncio.create_task(self._run_one(rid, as_of, trigger, current), name=f"assess-{rid}")
             self.inflight[key] = task
             task.add_done_callback(lambda t, k=key: self._done(k, t))
         return task
@@ -683,17 +684,17 @@ class Assessor:
             self.stats.fallbacks += 1
             return None, f"Snowflake Cortex unavailable ({type(exc).__name__}); showing the template"
 
-    async def _run_one(self, rid: int, as_of: datetime | None, trigger: str) -> dict:
+    async def _run_one(self, rid: int, as_of: datetime | None, trigger: str, current: dict | None = None) -> dict:
         async with self._sem:
             try:
-                return await asyncio.wait_for(self._assess(rid, as_of, trigger), CORTEX_TIMEOUT_S)
+                return await asyncio.wait_for(self._assess(rid, as_of, trigger, current), CORTEX_TIMEOUT_S)
             except Exception as exc:
                 self.stats.errors += 1
                 self.stats.last_error = f"R-{rid}: {' '.join(str(exc).split())[:200] or type(exc).__name__}"
                 log.warning("assess: %s", self.stats.last_error)
                 raise
 
-    async def _assess(self, rid: int, as_of: datetime | None, trigger: str) -> dict:
+    async def _assess(self, rid: int, as_of: datetime | None, trigger: str, current: dict | None = None) -> dict:
         live = as_of is None
         at = datetime.now(UTC).replace(microsecond=0) if live else as_of
         t0 = time.perf_counter()
@@ -702,7 +703,7 @@ class Assessor:
             if not rows:
                 raise LookupError(f"no resident {rid}")
             resident = rows[0]
-            current = await ev.current_for(conn, rid, at, live=live)
+            current = current or await ev.current_for(conn, rid, at, live=live)
             # Cortex Search (Snowflake) runs while the rest of the context is read from Tiger.
             search = asyncio.create_task(self._care_plan(rid, care_plan_query(resident, current)))
             try:

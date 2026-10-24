@@ -14,6 +14,7 @@ from app.api.deps import TigerConn, parse_ts
 from app.db import tiger
 from app.deep.assess import get_assessor, template_assessment
 from app.scoring import evaluator as ev
+from app.sim import replay
 
 router = APIRouter(prefix="/api/explain", tags=["insights"])
 
@@ -25,6 +26,18 @@ async def explain(resident_id: int, conn: TigerConn, as_of: str | None = None) -
     if not rows:
         raise HTTPException(404, f"no resident {resident_id}")
     assessor = get_assessor()
+    if (cursor := replay.replay_cursor()) is not None:  # replay never calls Cortex: its cards were prepared
+        at = ts or cursor
+        current = replay.get_engine().card(resident_id) if ts is None else None
+        current = current or await ev.current_for(conn, resident_id, at, live=False)
+        cached = await assessor.cached(conn, resident_id, at, live=False)
+        if cached:
+            return cached | {"pending": False}
+        return template_assessment(rows[0], current) | {
+            "as_of": at.isoformat(),
+            "fallback_reason": "Replay shows the AI cards Prepare replay generated; none for this moment",
+            "pending": False,
+        }
     at = ts or datetime.now(UTC)
     # The fallback's score card is read while Cortex works, so a fallback still answers within the 8 s budget.
     current, (payload, reason) = await asyncio.gather(

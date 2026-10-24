@@ -7,13 +7,27 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import checks, devices, explain, health, insights, notes, queue, residents, sim, staff, stats
+from app.api import (
+    bench,
+    checks,
+    devices,
+    explain,
+    health,
+    insights,
+    notes,
+    queue,
+    residents,
+    sim,
+    staff,
+    stats,
+)
+from app.api import replay as replay_api
 from app.config import get_settings
 from app.db import snowflake_rest, tiger
 from app.deep import assess, sync
 from app.devices import ingest
 from app.scoring import evaluator
-from app.sim import live_loop
+from app.sim import live_loop, replay
 from app.ws import hub
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -35,6 +49,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         tasks.append(assess_task)
     if (ingest_task := ingest.start()) is not None:  # Polar band + iPhone bed sensor → Tiger every 1 s
         tasks.append(ingest_task)
+    if get_settings().tiger_configured and get_settings().stats_flush_enabled:  # → Tiger snowflake_calls / 30 s
+        tasks.append(asyncio.create_task(sync.flush_loop(), name="stats-flush"))
+    if (replay_task := replay.start()) is not None:  # last night through the live pipeline (idle until started)
+        tasks.append(replay_task)
     try:
         yield
     finally:
@@ -63,6 +81,8 @@ app.include_router(sim.router)
 app.include_router(insights.router)
 app.include_router(explain.router)
 app.include_router(stats.router)
+app.include_router(bench.router)
+app.include_router(replay_api.router)
 app.include_router(devices.router)
 app.include_router(hub.router)
 app.include_router(ingest.router)

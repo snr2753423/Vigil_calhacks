@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.api.deps import TigerConn, facility_tz
+from app.api.deps import TigerConn, facility_tz, refuse_in_replay
 from app.db import tiger
 from app.scoring import evaluator as ev
 from app.sim import facility as fac
@@ -28,6 +28,7 @@ class NoteIn(BaseModel):
 
 @router.post("/notes", status_code=201)
 async def add_note(body: NoteIn, conn: TigerConn) -> dict:
+    refuse_in_replay("add a note")
     text = " ".join(body.text.split())
     if not text:
         raise HTTPException(422, "empty note")

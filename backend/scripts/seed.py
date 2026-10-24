@@ -21,6 +21,7 @@ from sync_snowflake import load_snowflake
 
 from app.config import get_settings
 from app.db import tiger
+from app.deep import sync
 from app.sim import cast
 from app.sim import facility as fac
 from app.sim.physiology import ResidentSim
@@ -311,7 +312,10 @@ def main() -> int:
     if not settings.tiger_configured:
         print("seed: TIGER_DATABASE_URL is not set in .env", file=sys.stderr)
         return 1
-    asyncio.run(run(args.days, args.seed, args.writers, not args.no_snowflake))
+    try:
+        asyncio.run(run(args.days, args.seed, args.writers, not args.no_snowflake))
+    finally:
+        asyncio.run(sync.flush_calls())  # Snowflake bulk-load calls → Tiger snowflake_calls
     return 0
 
 

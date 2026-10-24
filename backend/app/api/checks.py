@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.api.deps import TigerConn, facility_tz
+from app.api.deps import TigerConn, facility_tz, refuse_in_replay
 from app.db import tiger
 from app.scoring import evaluator as ev
 from app.sim import facility as fac
@@ -24,6 +24,7 @@ class CheckIn(BaseModel):
 
 @router.post("/checks", status_code=201)
 async def log_check(body: CheckIn, conn: TigerConn) -> dict:
+    refuse_in_replay("log a check")
     row = await tiger.fetchone(conn, "SELECT unit FROM residents WHERE resident_id = %s", (body.resident_id,))
     if row is None:
         raise HTTPException(404, f"no resident {body.resident_id}")

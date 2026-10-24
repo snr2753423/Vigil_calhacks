@@ -23,7 +23,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -51,6 +51,8 @@ QUEUE_REFRESH_S = 10.0  # /ws/live: send the queue when a card changes, else at 
 WIRE_SPARK_MIN = 24  # /ws/live: HR sparklines for every flagged card and at least this many top cards
 SLOW_CYCLE_MS = 1000
 ALERT_TIERS = ("HIGH", "CRITICAL")
+
+Headline = Callable[[int, datetime], dict | None]  # (resident_id, as_of) → {text, at} of an AI card, or None
 
 
 # --------------------------------------------------------------------------- alarm-fatigue gate
@@ -321,11 +323,12 @@ class QueueItem:
             }
         return card
 
-    def to_wire(self, *, spark: bool) -> dict:
+    def to_wire(self, *, spark: bool, headline: Headline | None = None) -> dict:
         """The compact /ws/live card: only what the Rounds Queue and floor grid draw. Profile fields (name,
         room, unit, code status) come from GET /api/residents once; the score breakdown from the resident
         page's GET /api/residents/{id}. Rank is the position in `items`. STABLE cards carry only their top
-        factor (the queue lists them as one-line rows)."""
+        factor (the queue lists them as one-line rows). `headline(rid, at)` gives the AI headline (default:
+        the live assessor's newest Cortex card; replay passes its prepared cards)."""
         p, f, r, d = self.profile, self.features, self.result, self.decision
         msc = r.components.minutes_since_check
         card = {
@@ -355,7 +358,8 @@ class QueueItem:
         }
         if spark:
             card["spark"] = [None if v is None else round(v) for v in f.hr_spark]
-        if d.tier != "STABLE" and (ai := assess.get_assessor().headline_for(p.resident_id, f.as_of)):
+        headline = headline or assess.get_assessor().headline_for
+        if d.tier != "STABLE" and (ai := headline(p.resident_id, f.as_of)):
             card["ai"] = ai  # the newest Snowflake Cortex headline: {text, at}
         return card
 
@@ -387,7 +391,7 @@ class Queue:
         """Ranked non-STABLE cards (see QueueItem.signature): a change here is pushed to /ws/live at once."""
         return tuple(it.signature() for it in self.items if it.tier != "STABLE")
 
-    def to_wire(self, clock: NightClock | None = None) -> dict:
+    def to_wire(self, clock: NightClock | None = None, *, headline: Headline | None = None) -> dict:
         """The /ws/live `queue` message (~34 KB for 120 residents, ~4 KB deflated; the slim REST cards are ~80 KB)."""
         clock = clock or (self.items[0].clock if self.items else None)
         return {
@@ -398,7 +402,10 @@ class Queue:
             "mode": sim_state.mode,
             "eval_ms": round(self.total_ms),
             "kpis": self.kpis(),
-            "items": [it.to_wire(spark=i < WIRE_SPARK_MIN or it.tier != "STABLE") for i, it in enumerate(self.items)],
+            "items": [
+                it.to_wire(spark=i < WIRE_SPARK_MIN or it.tier != "STABLE", headline=headline)
+                for i, it in enumerate(self.items)
+            ],
         }
 
     def to_dict(self, clock: NightClock | None = None, *, detail: bool = True) -> dict:
@@ -447,14 +454,12 @@ async def evaluate(
     return Queue(as_of, items, (t1 - t0) * 1000, (t2 - t0) * 1000)
 
 
-async def evaluate_at(
-    conn: psycopg.AsyncConnection, as_of: datetime, tz: ZoneInfo, ctx: ScoringContext | None, *, live: bool = False
-) -> Queue:
-    """Stateless evaluation for an arbitrary as_of (API): no hysteresis/persistence history; suppression uses
-    the score recorded in priority_snapshots when the check was logged (else the score now). `live` = as_of is
-    now, so the demo's force-night / display offset apply."""
-    ctx = ctx or await load_context(conn)
-    clock = night_clock(tz, live=live)
+async def check_scores_at(
+    conn: psycopg.AsyncConnection, as_of: datetime, table: str = "priority_snapshots"
+) -> dict[int, float]:
+    """For each resident checked in the 30 min before as_of: the score recorded in priority_snapshots just before
+    that check. A gate that starts cold (a stateless evaluation, a replay seek) needs it for post-check
+    suppression ("unless the score rises ≥ 10 above where it was at the check")."""
     checks = {
         r["resident_id"]: r["last_check"]
         for r in await tiger.fetch_dicts(
@@ -465,10 +470,32 @@ async def evaluate_at(
             {"as_of": as_of},
         )
     }
-    check_scores = await tiger.snapshot_scores_before(conn, checks)
+    return await tiger.snapshot_scores_before(conn, checks, table)
+
+
+async def evaluate_at(
+    conn: psycopg.AsyncConnection, as_of: datetime, tz: ZoneInfo, ctx: ScoringContext | None, *, live: bool = False
+) -> Queue:
+    """Stateless evaluation for an arbitrary as_of (API): no hysteresis/persistence history; suppression uses
+    the score recorded in priority_snapshots when the check was logged (else the score now). `live` = as_of is
+    now, so the demo's force-night / display offset apply."""
+    ctx = ctx or await load_context(conn)
+    clock = night_clock(tz, live=live)
+    check_scores = await check_scores_at(conn, as_of)
     queue = await evaluate(conn, as_of, ctx, AlertGate(persistence=1), clock, check_scores=check_scores)
     queue.gated = False
     return queue
+
+
+def alert_message(as_of: datetime, it: QueueItem) -> dict:
+    """The /ws/live `alert` message (toast + sound) for a gate decision that raised an alert."""
+    p, d = it.profile, it.decision
+    return {
+        "type": "alert", "ts": as_of.isoformat(), "resident_id": p.resident_id, "name": p.name, "room": p.room,
+        "unit": p.unit, "tier": d.tier, "from_tier": d.prev_tier, "score": d.score,
+        "rule": d.rule.to_dict() if d.rule else None, "new_rules": list(d.new_rules),
+        "factors": [x.text for x in it.result.factors], "sound": d.tier == "CRITICAL",
+    }  # fmt: skip
 
 
 def live_card(rid: int) -> dict | None:
@@ -527,8 +554,11 @@ class Evaluator:
         self._sent_at = 0.0
         self._wake = asyncio.Event()
 
-    def poke(self) -> None:
-        """Run the next cycle now (e.g. right after a check is logged)."""
+    def poke(self, *, republish: bool = False) -> None:
+        """Run the next cycle now (e.g. right after a check is logged). `republish`: broadcast its queue even if
+        no card changed (back from replay: clients still show the replay's queue)."""
+        if republish:
+            self._sent_sig = None
         self._wake.set()
 
     async def run(self) -> None:
@@ -592,13 +622,17 @@ class Evaluator:
         alerts, events = self._alerts(queue, clock)
         self.latest = queue
         # Publish first, store second: the UI (and Cortex) shouldn't wait on the snapshot write's round trips.
-        await self._publish(queue, clock)
-        assessor = assess.get_assessor()
-        for a in alerts:
-            await hub.broadcast(a)
-            assessor.on_alert(
-                a["resident_id"], a["tier"], rule=bool(a["new_rules"])
-            )  # Cortex now, not on the 10-s scan
+        # During a replay the facility keeps being scored and stored live, but /ws/live shows the replay.
+        if sim_state.mode == "live":
+            await self._publish(queue, clock)
+            assessor = assess.get_assessor()
+            for a in alerts:
+                if sim_state.mode != "live":  # a replay started while we were broadcasting
+                    break
+                await hub.broadcast(a)
+                assessor.on_alert(
+                    a["resident_id"], a["tier"], rule=bool(a["new_rules"])
+                )  # Cortex now, not on the 10-s scan
         await self._write(conn, queue, events)
         total = (time.perf_counter() - t0) * 1000
         queue.total_ms = total
@@ -625,12 +659,7 @@ class Evaluator:
                            "rule": d.rule.rule if d.rule else None, "new_rules": list(d.new_rules),
                            "factors": factors}  # fmt: skip
                 events.append((ts, p.resident_id, "alert_raised", None, payload))
-                alerts.append({
-                    "type": "alert", "ts": queue.as_of.isoformat(), "resident_id": p.resident_id, "name": p.name,
-                    "room": p.room, "unit": p.unit, "tier": d.tier, "from_tier": d.prev_tier, "score": d.score,
-                    "rule": d.rule.to_dict() if d.rule else None, "new_rules": list(d.new_rules),
-                    "factors": factors, "sound": d.tier == "CRITICAL",
-                })  # fmt: skip
+                alerts.append(alert_message(queue.as_of, it))
             elif d.resolved:
                 reason = "checked" if d.suppressed_until else "improved"
                 payload = {"tier": d.tier, "from_tier": d.prev_tier, "score": d.score, "reason": reason}

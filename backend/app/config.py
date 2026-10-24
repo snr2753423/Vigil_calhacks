@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     # Live hardware (SPEC §10): the public HTTPS origin (cloudflared tunnel or the Vultr domain) for the
     # iPhone bed-sensor QR code on /devices. Re-read on each request, so no restart is needed after editing.
     public_url: str | None = None
+    stats_flush_enabled: bool = True  # add Snowflake call counts to Tiger snowflake_calls every 30 s
     device_ingest_enabled: bool = True  # the 1-s device writer (WS /ws/ingest still answers when off)
 
     @property

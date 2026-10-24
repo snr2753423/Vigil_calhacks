@@ -17,6 +17,7 @@ from app.config import get_settings
 from app.db import snowflake_sql as sf
 from app.db import tiger
 from app.db.snowflake_rest import client as rest_client
+from app.deep import sync
 from app.sim.care_plans import filename
 
 SQL_FILE = sf.MIGRATIONS_DIR / "003_docs.sql"
@@ -107,6 +108,7 @@ def main() -> int:
         conn.close()
     asyncio.run(probe())
     if get_settings().tiger_configured:
+        asyncio.run(sync.flush_calls())  # → Tiger snowflake_calls (/under-the-hood)
         asyncio.run(record_uris(ids))
         print(f"care-plans: residents.care_plan_uri set for {len(ids)} residents in Tiger")
     return 0

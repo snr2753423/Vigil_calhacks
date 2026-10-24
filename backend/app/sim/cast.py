@@ -843,11 +843,15 @@ def scripted_night(night: date, tz: ZoneInfo) -> dict[int, list[Scenario]]:
     return scenarios
 
 
-# Replay bookmarks (SPEC §4): (hours after the night's evening midnight, resident, label).
+# Replay bookmarks (SPEC §4): (hours after the night's evening midnight, resident, label). Alvarez's times are
+# the gated replay's (Phase 5/8): WATCH and #1 at 23:12, HIGH at 01:34, #1 again at 02:14 (HIGH 63) after trading
+# places with Lee, and the 02:20 note once the late round reaches her.
 BOOKMARKS = (
-    (23 + 40 / 60, 17, "Alvarez first deviation"),
+    (23 + 12 / 60, 17, "Alvarez first deviation (WATCH)"),
     (25.5, 42, "Lee forecast warning"),
+    (25 + 34 / 60, 17, "Alvarez reaches HIGH"),
     (26 + 14 / 60, 17, "Alvarez reaches #1"),
+    (26 + 20 / 60, 17, "Alvarez confusion noted"),
     (27 + 20 / 60, 101, "Patel immobility"),
     (28 + 5 / 60, 110, "Ortiz fall"),
 )

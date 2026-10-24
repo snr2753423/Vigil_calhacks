@@ -40,19 +40,36 @@ class FeatureStats:
 
 
 class CallStats:
-    """Thread-safe per-feature call counters (the connector runs in worker threads)."""
+    """Thread-safe per-feature call counters (the connector runs in worker threads). `drain()` hands the
+    calls recorded since the last drain to the Tiger `snowflake_calls` totals."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._by_feature: dict[str, FeatureStats] = {}
+        self._pending: dict[str, FeatureStats] = {}
 
     def record(self, feature: str, elapsed_ms: float, ok: bool) -> None:
         with self._lock:
-            stats = self._by_feature.setdefault(feature, FeatureStats())
-            stats.calls += 1
-            stats.total_ms += elapsed_ms
-            if not ok:
-                stats.errors += 1
+            for book in (self._by_feature, self._pending):
+                stats = book.setdefault(feature, FeatureStats())
+                stats.calls += 1
+                stats.total_ms += elapsed_ms
+                if not ok:
+                    stats.errors += 1
+
+    def drain(self) -> dict[str, FeatureStats]:
+        with self._lock:
+            pending, self._pending = self._pending, {}
+        return pending
+
+    def restore(self, pending: dict[str, FeatureStats]) -> None:
+        """Put drained counts back (the write to Tiger failed) so they go out with the next flush."""
+        with self._lock:
+            for name, s in pending.items():
+                cur = self._pending.setdefault(name, FeatureStats())
+                cur.calls += s.calls
+                cur.errors += s.errors
+                cur.total_ms += s.total_ms
 
     @contextmanager
     def timed(self, feature: str) -> Iterator[None]:

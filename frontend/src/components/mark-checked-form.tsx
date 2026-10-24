@@ -6,6 +6,7 @@ import { cn } from "cn";
 
 import { postJSON } from "@/lib/api";
 import { facilityHHMM } from "@/lib/format";
+import { useLiveStore } from "@/store/live";
 
 const KINDS = [
   { value: "bedside", label: "Bedside check" },
@@ -24,6 +25,7 @@ export function MarkCheckedForm({ residentId, name, onLogged, compact = false }:
   const [state, setState] = useState<"idle" | "saving" | "done" | "error">("idle");
   const [doneAt, setDoneAt] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const replay = useLiveStore((s) => s.sim?.mode === "replay");
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,6 +46,14 @@ export function MarkCheckedForm({ residentId, name, onLogged, compact = false }:
       setState("error");
     }
   };
+
+  if (replay) {
+    return (
+      <span className="flex h-12 items-center gap-2 rounded-xl px-3 text-sm text-muted-foreground ring-1 ring-white/10">
+        <ClipboardCheck className="size-5" aria-hidden /> Checks are logged in live mode (replay is read-only)
+      </span>
+    );
+  }
 
   if (!open) {
     return (

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { cn } from "cn";
 
 import { InjectorPanel } from "@/components/admin/injector-panel";
+import { ReplayPanel } from "@/components/admin/replay-panel";
 import { HeartbeatPanel } from "@/components/heartbeat-panel";
 import { Stat } from "@/components/stat";
 import { useNow } from "@/hooks/use-now";
@@ -16,7 +17,7 @@ import { useLiveStore } from "@/store/live";
 
 const POLL_MS = 5000;
 
-/** Demo controls (SPEC §11.8): pause/start, force night + display clock, scenario injectors, reset. */
+/** Demo controls (SPEC §11.8): replay, pause/start, force night + display clock, scenario injectors, reset. */
 export function AdminPanel() {
   const [status, setStatus] = useState<SimStatus | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -68,6 +69,8 @@ export function AdminPanel() {
           {msg.text}
         </p>
       )}
+
+      <ReplayPanel />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel title="Simulator">

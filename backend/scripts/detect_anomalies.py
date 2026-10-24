@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 from app.config import get_settings
 from app.db import snowflake_sql as sf
 from app.db import tiger
-from app.deep import anomaly
+from app.deep import anomaly, sync
 from app.sim.cast import CAST_IDS
 
 METRICS = tuple(anomaly.MODELS)
@@ -117,7 +117,10 @@ def main() -> int:
     if not settings.tiger_configured or (not args.summary_only and not settings.snowflake_configured):
         print("detect: Tiger and Snowflake must be configured in .env", file=sys.stderr)
         return 1
-    asyncio.run(run(args.start, args.end, args.summary_only))
+    try:
+        asyncio.run(run(args.start, args.end, args.summary_only))
+    finally:
+        asyncio.run(sync.flush_calls())  # → Tiger snowflake_calls (/under-the-hood)
     return 0
 
 
