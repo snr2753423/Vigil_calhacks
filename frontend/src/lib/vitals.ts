@@ -1,6 +1,7 @@
 // Pure helpers for the resident charts (SPEC §11.2): ranges, personal-baseline bands, NEWS2 zones.
 import { facilityHour } from "@/lib/format";
-import type { AnomalyBucket, AnomalyMetricKey, VitalBaselines } from "@/lib/types";
+import type { ForecastOverlay } from "@/lib/chart-options";
+import type { AnomalyBucket, AnomalyMetricKey, Forecast, VitalBaselines } from "@/lib/types";
 
 export type RangeKey = "6h" | "24h" | "7d";
 
@@ -154,4 +155,43 @@ export function appendLive(
   const fresh = (live ?? []).filter(([t]) => t > after && t > (ts[ts.length - 1] ?? -Infinity));
   if (fresh.length === 0) return { ts, values };
   return { ts: [...ts, ...fresh.map(([t]) => t)], values: [...values, ...fresh.map(([, v]) => v)] };
+}
+
+/** A forecast drives P_trend (and is drawn) for this long after it was made (backend FORECAST_LOOKBACK_MIN). */
+export const FORECAST_FRESH_MS = 60 * 60_000;
+
+/** The newest forecast known at `endMs` and still fresh, or null. */
+export function latestForecast(items: Forecast[], endMs: number): Forecast | null {
+  let best: Forecast | null = null;
+  for (const f of items) {
+    const t = Date.parse(f.as_of);
+    if (t <= endMs && endMs - t <= FORECAST_FRESH_MS && (!best || t > Date.parse(best.as_of))) best = f;
+  }
+  return best;
+}
+
+/** One metric of a forecast as a chart overlay: the first `chart_periods` buckets (2 h), drawn at bucket centres,
+ *  starting from the last observed bucket so the dashed line continues the measured one. `threshold`: the NEWS2
+ *  3-point line the forecast crosses (within 4 h), else null. */
+export function forecastOverlay(f: Forecast, metric: "rr" | "spo2" | "hr"): ForecastOverlay | null {
+  const m = f.metrics[metric];
+  if (!m || !m.points.length) return null;
+  const pts = m.points.slice(0, f.chart_periods || 8);
+  const ts: number[] = [];
+  const value: (number | null)[] = [];
+  const lower: (number | null)[] = [];
+  const upper: (number | null)[] = [];
+  if (m.last_value !== null) {
+    ts.push(Date.parse(m.last_ts) + BUCKET_MS / 2);
+    value.push(m.last_value);
+    lower.push(m.last_value);
+    upper.push(m.last_value);
+  }
+  for (const [t, v, lo, hi] of pts) {
+    ts.push(Date.parse(t) + BUCKET_MS / 2);
+    value.push(v);
+    lower.push(lo);
+    upper.push(hi);
+  }
+  return { ts, value, lower, upper, threshold: m.crossing ? m.crossing.threshold : null };
 }

@@ -5,6 +5,7 @@ import {
   Clock,
   type LucideIcon,
   MessageSquareText,
+  TrendingUp,
   WatchIcon,
 } from "lucide-react";
 import { cn } from "cn";
@@ -18,6 +19,7 @@ const KIND: Record<FactorKind, { icon: LucideIcon; label: string; className: str
   concern: { icon: MessageSquareText, label: "Staff note", className: "bg-fuchsia-500/14 text-fuchsia-100" },
   overdue: { icon: Clock, label: "Check due", className: "bg-slate-500/20 text-slate-100" },
   device: { icon: WatchIcon, label: "Device", className: "bg-slate-500/20 text-slate-200" },
+  trend: { icon: TrendingUp, label: "Snowflake forecast", className: "bg-amber-500/14 text-amber-100" },
 };
 
 /** One deterministic contributing factor (never AI-invented, SPEC §7d). */

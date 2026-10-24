@@ -32,7 +32,7 @@ import psycopg
 
 from app.config import Settings, get_settings
 from app.db import tiger
-from app.deep import assess
+from app.deep import assess, forecast
 from app.scoring import priority
 from app.scoring.baseline import Baselines
 from app.scoring.features import Profile, ResidentFeatures, build_features
@@ -633,6 +633,7 @@ class Evaluator:
                 assessor.on_alert(
                     a["resident_id"], a["tier"], rule=bool(a["new_rules"])
                 )  # Cortex now, not on the 10-s scan
+                forecast.get_forecaster().on_alert(a["resident_id"], a["tier"])  # Snowflake FORECAST → P_trend
         await self._write(conn, queue, events)
         total = (time.perf_counter() - t0) * 1000
         queue.total_ms = total

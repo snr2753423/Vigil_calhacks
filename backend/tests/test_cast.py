@@ -202,13 +202,29 @@ def test_alvarez_notes_low_concern_then_confusion_found_at_0220(history) -> None
 
 
 def test_lee_fluid_overload_masked_by_beta_blocker(history) -> None:
-    cols, _, ts = history[42]
+    cols, events, ts = history[42]
     assert window_mean(cols, ts, "rr", 22.0, 10) <= 18.5
-    assert 25 <= window_mean(cols, ts, "rr", 26.5, 5) <= 27.5  # RR ≈ 26 by 02:30
-    assert 89 <= window_mean(cols, ts, "spo2", 26.5, 10) <= 91  # SpO2 95 → 90
-    hr_rise = window_mean(cols, ts, "hr", 26.5, 10) - window_mean(cols, ts, "hr", 22.5, 10)
+    assert 20.5 <= window_mean(cols, ts, "rr", 26 + 14 / 60, 5) <= 23  # below 25 when Alvarez takes #1 at 02:14
+    assert 24.5 <= window_mean(cols, ts, "rr", 27.0, 5) <= 26.5  # crosses 25 around 03:00
+    assert 89 <= window_mean(cols, ts, "spo2", 27.25, 10) <= 91  # SpO2 95 → 90 by ~03:15
+    hr_rise = window_mean(cols, ts, "hr", 27.0, 10) - window_mean(cols, ts, "hr", 22.5, 10)
     assert 2 <= hr_rise <= 9  # only ~+6 bpm (masked)
     assert np.nanmax(cols["rr"][(ts >= at(21)) & (ts < at(30.5))]) < 28  # never the RR ≥ 28 critical rule
+    rn = [e for e in events if e.type in ("check_logged", "note_added") and e.staff_id == fac.staff_on_duty("RN", 3)]
+    assert any(abs(e.ts - at(27 + 20 / 60)) < 60 for e in rn)  # the RN assessment follows the crossing
+
+
+def test_lee_curve_from_0430_is_the_pre_phase_9_one() -> None:
+    """Rows after the seed's end were written by the live loop with the old curve: 04:30 onward must not change."""
+    old = {"RR": [(21, 0), (23, 1.5), (24, 3), (25, 4.5), (25.5, 5.5), (26, 7), (26.5, 10), (27 + 5 / 60, 10),
+                  (28, 8), (30.5, 6), (32.5, 5), (36, 0)],
+           "SPO2": [(21, 0), (23, -1), (24.5, -2.5), (25.5, -3.5), (26.5, -5), (27 + 5 / 60, -5), (27.5, -2),
+                    (30.5, -1), (36, 0)],
+           "HR": [(21, 0), (26.5, 6), (27 + 5 / 60, 6), (30.5, 4), (36, 0)]}  # fmt: skip
+    grid = np.linspace(28.5, 36, 200)
+    for name, pts in old.items():
+        new = getattr(cast.LeeFluidOverload, f"{name}_DELTA")
+        assert np.allclose(np.interp(grid, *zip(*new, strict=True)), np.interp(grid, *zip(*pts, strict=True))), name
 
 
 def test_patel_stops_moving_and_slows(history) -> None:
@@ -266,7 +282,7 @@ def test_quiet_night_for_everyone_else(roster) -> None:
 def test_bookmarks_are_in_the_scripted_night() -> None:
     marks = cast.bookmarks(NIGHT, TZ)
     labels = [m["label"] for m in marks]
-    top = labels.index("Alvarez reaches #1")
+    top = labels.index("Alvarez at #1")
     window = cast.scripted_window(NIGHT, TZ)
     for m in marks:
         t = datetime.fromisoformat(m["ts"]).timestamp()

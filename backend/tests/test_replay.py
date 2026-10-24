@@ -51,9 +51,9 @@ def test_bookmarks_follow_the_gated_replay_timeline() -> None:
     marks = {b["label"]: datetime.fromisoformat(b["ts"]) for b in NIGHT.bookmarks}
     assert marks["Alvarez first deviation (WATCH)"] == at("23:12")
     assert marks["Alvarez reaches HIGH"] == at("01:34")
-    assert marks["Alvarez reaches #1"] == at("02:14")
+    assert marks["Alvarez at #1"] == at("02:14")
     assert marks["Alvarez confusion noted"] == at("02:20")
-    assert marks["Lee forecast warning"] == at("01:30")
+    assert marks["Lee forecast warning"] == at("02:30")
     assert marks["Patel immobility"] == at("03:20") and marks["Ortiz fall"] == at("04:05")
     times = [b["ts"] for b in NIGHT.bookmarks]
     assert times == sorted(times)

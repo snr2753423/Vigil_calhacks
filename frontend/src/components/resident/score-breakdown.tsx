@@ -1,6 +1,8 @@
 import { facilityHHMM } from "@/lib/format";
 import type { ComponentKey, Components } from "@/lib/types";
 
+const TREND_LABEL = { rr: "RR", spo2: "SpO₂", hr: "HR" } as const;
+
 // Each bar is a component's points out of its maximum; both come from the backend (SPEC §7d weights).
 const PARTS: { key: ComponentKey; label: string; note?: (c: Components) => string }[] = [
   { key: "news", label: "NEWS2 (available inputs)", note: (c) => `NEWS2 ${c.news2_total}` },
@@ -12,7 +14,14 @@ const PARTS: { key: ComponentKey; label: string; note?: (c: Components) => strin
         ? `Snowflake anomaly detection${c.anom_as_of ? ` · known ${facilityHHMM(Date.parse(c.anom_as_of))}` : ""}`
         : "Tiger baseline z-scores (no fresh Snowflake result)",
   },
-  { key: "trend", label: "Forecast trend", note: () => "Snowflake forecast (later phase)" },
+  {
+    key: "trend",
+    label: "Forecast trend",
+    note: (c) =>
+      c.trend_metric && c.trend_crosses_at && c.trend_threshold != null
+        ? `Snowflake FORECAST: ${TREND_LABEL[c.trend_metric]} ${c.trend_direction === "up" ? "≥" : "≤"} ${c.trend_threshold} by ~${facilityHHMM(Date.parse(c.trend_crosses_at))}`
+        : "Snowflake FORECAST (on HIGH/CRITICAL): no NEWS2 +3 crossing within 4 h",
+  },
   { key: "behav", label: "Behavior", note: () => "bed exits · restlessness · stillness" },
   { key: "concern", label: "Staff concern", note: () => "latest note" },
   { key: "overdue", label: "Time since check" },

@@ -24,7 +24,7 @@ export function ReplayBanner() {
   const pct = Math.round(replayProgress(brief, cursor) * 1000) / 10;
 
   return (
-    <div className="border-b border-violet-400/30 bg-violet-950/60" role="region" aria-label="Replay">
+    <div className="print-hide border-b border-violet-400/30 bg-violet-950/60" role="region" aria-label="Replay">
       <div className="mx-auto flex max-w-[96rem] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2">
         <p className="flex min-w-0 items-center gap-2 text-base text-violet-50">
           <Rewind className="size-5 shrink-0 text-violet-200" aria-hidden />

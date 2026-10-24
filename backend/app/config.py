@@ -48,10 +48,15 @@ class Settings(BaseSettings):
     # Training window: up to this many days, ending where last night's holdout starts (SPEC: days −14…−2).
     # Clamped to the seeded history, so a 3-day seed trains on ~2 days.
     anomaly_train_days: float = 12.0
-    snowflake_train_warehouse: str | None = None  # optional bigger warehouse for `make train` only
+    snowflake_train_warehouse: str | None = None  # optional warehouse for heavy ML: `make train` + FORECAST
 
     # Deep tier: Cortex AI assessment (SPEC §9 ⑤): automatic triggers; Refresh works whenever Snowflake is set
     assess_enabled: bool = True
+
+    # Deep tier: Snowflake FORECAST on HIGH/CRITICAL (SPEC §9 ③) → P_trend. Trailing window of closed 15-min
+    # buckets each single-series model trains on (SPEC says 48 h; see deep/forecast.py for why 4 h).
+    forecast_enabled: bool = True
+    forecast_train_hours: float = 4.0
 
     # Live WebSocket
     heartbeat_interval_s: float = 2.0

@@ -3,7 +3,7 @@
 export type Tier = "CRITICAL" | "HIGH" | "WATCH" | "STABLE";
 export type CodeStatus = "FULL" | "DNR" | "DNR-DNI" | "COMFORT";
 export type Unit = "East" | "West" | "Memory Care";
-export type FactorKind = "rule" | "vital" | "behavior" | "concern" | "overdue" | "device";
+export type FactorKind = "rule" | "vital" | "behavior" | "concern" | "overdue" | "device" | "trend";
 
 export type SimState = {
   mode: "live" | "replay";
@@ -213,6 +213,12 @@ export type Components = {
   restlessness: number;
   still: number;
   minutes_since_check: number | null;
+  /** The Snowflake FORECAST behind P_trend: the metric, the NEWS2 3-point threshold it crosses, and when. */
+  trend_metric?: "rr" | "spo2" | "hr" | null;
+  trend_threshold?: number | null;
+  trend_direction?: "up" | "down" | null;
+  trend_crosses_at?: string | null;
+  trend_as_of?: string | null;
   /** Points each component adds to the score, and its maximum (100 × weight), from the backend. */
   points: Record<ComponentKey, number>;
   max_points: Record<ComponentKey, number>;
@@ -277,15 +283,70 @@ export type Assessment = {
   via?: "inference_rest" | "sql_api";
 };
 
-/** /ws/live: a new Cortex assessment was stored. */
+/** /ws/live: a new Snowflake result was stored (Cortex assessment, forecast, note extraction). */
 export type InsightMessage = {
   type: "insight";
-  kind: "assessment";
+  kind: "assessment" | "forecast" | "note_extract";
   resident_id: number;
   as_of: string;
   live: boolean;
-  headline: string;
+  headline?: string;
+  model?: string;
+  callout?: string | null;
+};
+
+/** [bucket start ISO, forecast, lower, upper] (90 % interval). */
+export type ForecastPoint = [string, number | null, number | null, number | null];
+
+export type ForecastMetric = {
+  points: ForecastPoint[];
+  n_train: number;
+  last_ts: string;
+  last_value: number | null;
+  crossing: { threshold: number; direction: "up" | "down"; bucket: string; crosses_at: string } | null;
+};
+
+/** One SNOWFLAKE.ML.FORECAST run (Tiger ai_insights, kind = forecast). */
+export type Forecast = {
+  as_of: string;
+  data_through: string;
+  train_hours: number;
+  periods: number;
+  chart_periods: number;
+  interval: number;
   model: string;
+  metrics: Partial<Record<"rr" | "spo2" | "hr", ForecastMetric>>;
+  p_trend: number;
+  callout: string | null;
+  seconds: number;
+};
+
+export type ForecastResponse = { resident_id: number; kind: "forecast"; items: Forecast[] };
+
+/** AI_EXTRACT fields for a nurse note (or the keyword fallback in the same shape). */
+export type NoteExtract = {
+  confusion_change: "new" | "worse" | "same" | "better" | "unknown";
+  oral_intake: "normal" | "reduced" | "refused" | "unknown";
+  pain_0_10: number | null;
+  urinary_symptoms: string | null;
+  fall_or_near_fall: boolean;
+  breathing_concern: boolean;
+  mood_behavior: string | null;
+  fever_or_warm: boolean;
+  concern_level: "none" | "low" | "med" | "high";
+  ai_concern_level?: string;
+  one_line_summary: string;
+  source: "snowflake" | "keyword";
+  model?: string;
+  ms?: number;
+};
+
+export type NoteResponse = ResidentEvent & {
+  resident_id: number;
+  transcript: { text: string; audio_duration: number | null; stage_path: string; ms: number } | null;
+  extract: NoteExtract;
+  /** ok | pending (still running; arrives on /ws/live) | why the keyword fallback was used */
+  extract_status: string;
 };
 
 export type ResidentDetail = RosterEntry & {
@@ -361,7 +422,7 @@ export type SimStatus = {
 export type Bookmark = { ts: string; resident_id: number; label: string };
 
 export type PrepareProgress = {
-  phase: "idle" | "detecting" | "scoring" | "forecasting" | "assessing" | "done" | "error";
+  phase: "idle" | "detecting" | "notes" | "scoring" | "forecasting" | "assessing" | "done" | "error";
   started_at: string | null;
   finished_at: string | null;
   step: number;
@@ -378,7 +439,8 @@ export type PreparedSummary = {
   detection: { ran: boolean; reason?: string; results?: number; seconds?: number; resident_buckets?: number; flagged_buckets?: number };
   gated: { steps: number; avg_ms: number; snapshots: number; alerts: number };
   assessments_summary: { planned: number; cortex: number; cached: number; failed: number };
-  forecasts: { status: string; requested: number; stored: number };
+  forecasts: { status: string; requested: number; stored: number; cached?: number; failed?: number };
+  notes?: { notes: number; extracted: number; cached: number; failed: number };
 };
 
 export type ReplayStatus = {
@@ -528,4 +590,72 @@ export type OutcomeStats = {
     alerts: { ts: string; tier: Tier; from_tier: Tier; score: number; rank: number }[];
     notes: { ts: string; text: string }[];
   };
+};
+
+// --------------------------------------------------------------------------- shift handoff (AI_AGG)
+
+export type Shift = "day" | "evening" | "night";
+
+export type SbarLine = {
+  resident_id: number;
+  name: string;
+  room: string;
+  situation: string;
+  background: string;
+  assessment: string;
+  recommendation: string;
+  source?: "template";
+};
+
+export type Handoff = {
+  shift: Shift;
+  date: string;
+  start: string;
+  end: string;
+  complete: boolean;
+  source: string;
+  residents_flagged: number;
+  generated_at: string;
+  flagged: { resident_id: number; name: string; room: string; peak_tier: Tier | null; end_tier: Tier | null }[];
+  critical_events: { time: string; resident: string; text: string }[];
+  watch_next_shift: { resident: string; reason: string; action: string }[];
+  resolved: { resident: string; text: string }[];
+  device_issues: { resident: string; text: string }[];
+  follow_ups: string[];
+  residents: SbarLine[];
+  model: string;
+  via?: string;
+  fixes?: string[];
+  fallback_reason?: string;
+  ms: number;
+  input_rows: string[];
+  sbar_rows?: number;
+};
+
+export type HandoffResponse = { shift: Shift; date: string; handoff: Handoff | null };
+
+// --------------------------------------------------------------------------- Ask the facility (Cortex Analyst)
+
+export type AskColumn = { name: string; type: string };
+
+export type AskChart = { type: "line" | "bar"; x: string; y: string; series?: string } | null;
+
+export type AskResult = {
+  question: string;
+  interpretation: string;
+  sql: string | null;
+  verified_query: { name: string; question: string; verified_by: string } | null;
+  suggestions: string[];
+  warnings: string[];
+  request_id: string | null;
+  analyst_ms: number;
+  exec_ms?: number;
+  total_ms?: number;
+  models: string[];
+  columns: AskColumn[];
+  rows: (string | number | boolean | null)[][];
+  row_count: number;
+  truncated: boolean;
+  chart: AskChart;
+  error: string | null;
 };

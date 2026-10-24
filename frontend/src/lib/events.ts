@@ -16,7 +16,11 @@ export function describeEvent(e: ResidentEvent): EventView {
         tone: "good",
       };
     case "note_added":
-      return { title: `Note${p.author_role ? ` · ${str(p.author_role)}` : ""}`, detail: str(p.text), tone: "staff" };
+      return {
+        title: `${p.source === "voice" ? "Voice note" : "Note"}${p.author_role ? ` · ${str(p.author_role)}` : ""}`,
+        detail: str(p.text),
+        tone: "staff",
+      };
     case "bed_exit":
       return { title: "Got out of bed", detail: null, tone: "info" };
     case "bed_return":

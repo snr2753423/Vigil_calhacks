@@ -32,6 +32,7 @@ CONNECT_TIMEOUT_S = 10
 KEEPALIVE = {"keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10, "keepalives_count": 5}
 MIGRATIONS_DIR = BACKEND_DIR / "sql" / "tiger"
 ANOMALY_LOOKBACK_MIN = 45  # Snowflake anomaly results older than this are stale for scoring (Tiger z instead)
+FORECAST_LOOKBACK_MIN = 60  # a Snowflake forecast older than this no longer drives P_trend (refreshed every 30 min)
 
 
 class TigerNotConfigured(RuntimeError):
@@ -579,11 +580,18 @@ SCORING_QUERIES: dict[str, str] = {
         WHERE ts > %(as_of)s - INTERVAL '24 hours' AND ts <= %(as_of)s
         GROUP BY resident_id
     """,
-    # Snowflake note extractions mirrored to Tiger (Phase 6); empty until then.
+    # Snowflake AI_EXTRACT results for nurse notes (deep/notes.py; as_of = when the extraction was known).
     "note_extract": """
         SELECT DISTINCT ON (resident_id) resident_id, as_of, payload
         FROM ai_insights
         WHERE kind = 'note_extract' AND as_of > %(as_of)s - INTERVAL '12 hours' AND as_of <= %(as_of)s
+        ORDER BY resident_id, as_of DESC
+    """,
+    # Snowflake FORECAST (as_of = when it became known): the newest one per resident, if fresh enough (P_trend).
+    "forecast": f"""
+        SELECT DISTINCT ON (resident_id) resident_id, as_of, payload
+        FROM ai_insights
+        WHERE kind = 'forecast' AND as_of <= %(as_of)s AND as_of > %(as_of)s - INTERVAL '{FORECAST_LOOKBACK_MIN} minutes'
         ORDER BY resident_id, as_of DESC
     """,
     # Snowflake ANOMALY_DETECTION results (as_of = bucket end): the newest 2 buckets known by as_of,

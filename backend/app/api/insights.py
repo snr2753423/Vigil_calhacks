@@ -9,10 +9,11 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.api.deps import TigerConn, parse_ts
+from app.api.deps import TigerConn, facility_tz, parse_ts
 from app.db import tiger
 from app.deep.anomaly import REVEAL_DELAY
 from app.deep.sync import BUCKET
+from app.scoring import trend
 
 router = APIRouter(prefix="/api/insights", tags=["insights"])
 
@@ -38,11 +39,15 @@ async def get_insights(
         raise HTTPException(400, f"range is longer than {MAX_RANGE.days} days")
     if kind != "anomaly":
         rows = await tiger.insights_range(conn, resident_id, kind, start, end)
-        return {
-            "resident_id": resident_id,
-            "kind": kind,
-            "items": [{"as_of": r["as_of"], **r["payload"]} for r in rows],
-        }
+        if kind == "forecast":  # crossings + callout under the current rules (scoring/trend.py)
+            row = await tiger.fetchone(conn, "SELECT flags FROM residents WHERE resident_id = %s", (resident_id,))
+            copd = bool(row and "copd" in (row[0] or ()))
+            items = [
+                trend.annotate(r["payload"] | {"as_of": r["as_of"].isoformat()}, facility_tz(), copd) for r in rows
+            ]
+        else:
+            items = [{"as_of": r["as_of"], **r["payload"]} for r in rows]
+        return {"resident_id": resident_id, "kind": kind, "items": items}
     # A bucket's result is stamped with when it became known (bucket end + reveal delay).
     rows = await tiger.insights_range(conn, resident_id, kind, start, end + BUCKET + REVEAL_DELAY)
     items = []

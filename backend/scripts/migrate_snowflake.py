@@ -14,7 +14,7 @@ from app.config import get_settings
 from app.db import snowflake_sql as sf
 
 SETUP_FILE = "001_setup.sql"
-APPLY_FILES = ("002_tables.sql",)  # later phases add their DDL here
+APPLY_FILES = ("002_tables.sql", "005_stages.sql")  # later phases add their DDL here
 
 
 def run(include_setup: bool) -> None:

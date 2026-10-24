@@ -5,13 +5,18 @@ Snowflake. Run from /admin (POST /api/replay/prepare) or `scripts/prepare_replay
    (from an hour before 22:00, so the warm-up is scored too). Skipped when the night already has results from
    the current models (e.g. `make train` detected through it), unless forced. Results land in Tiger
    `ai_insights` stamped with when live would have known them (bucket end + 10 min).
-2. **Gated pass.** The real evaluator and AlertGate over the night on the replay grid (every 2 min from 21:00),
+2. **Notes.** `AI_EXTRACT` on the night's non-routine nurse notes (the cast's, e.g. Alvarez 21:30 and 02:20), stamped
+   as known 30 s after each note, so the replay scores P_concern / NEWS2 consciousness from real extractions.
+3. **Gated pass.** The real evaluator and AlertGate over the night on the replay grid (every 2 min from 21:00),
    as_of each step. Each step's scores are upserted into `replay_snapshots` (a replay seek seeds its gate from
-   them), and
-   the pass records tier changes, alerts and the cast's ranks: the escalations below, and the outcome metrics on
-   /under-the-hood.
-3. **Forecasts.** `forecast.prepare_replay_forecasts` with every resident entering HIGH/CRITICAL (Phase 9).
-4. **AI cards.** Snowflake Cortex assessments at each bookmark and at each escalation into HIGH/CRITICAL,
+   them), and the pass records tier changes, alerts and the cast's ranks: the escalations below, and the outcome
+   metrics on /under-the-hood.
+4. **Forecasts.** `SNOWFLAKE.ML.FORECAST` where live would have asked for one: at each entry into HIGH/CRITICAL and
+   every 30 min while it lasts (`forecast.plan_replay`), each stamped as known 2 min after the ask. A forecast raises
+   P_trend, which can keep a resident HIGH longer, so the gated pass runs again with the forecasts in place, and
+   forecasts the new pass asks for are added (at most FORECAST_ROUNDS rounds). Every pass is stored (upserts); the
+   last one, which asked for no new forecast, is what replay shows.
+5. **AI cards.** Snowflake Cortex assessments at each bookmark and at each escalation into HIGH/CRITICAL,
    generated as_of that moment and cached in `ai_insights` (kind = assessment). Cards already cached are kept.
 
 Everything is keyed by as_of; the replay only shows what has as_of ≤ cursor. The summary is stored in
@@ -33,7 +38,7 @@ import psycopg
 from app.config import get_settings
 from app.db import snowflake_sql as sf
 from app.db import tiger
-from app.deep import anomaly, forecast
+from app.deep import anomaly, forecast, notes
 from app.deep.assess import get_assessor
 from app.deep.sync import BUCKET
 from app.scoring import evaluator as ev
@@ -51,6 +56,8 @@ SNAPSHOT_BATCH = 15  # steps per replay_snapshots upsert
 ASSESS_DEDUPE = timedelta(minutes=10)  # a score-driven escalation this soon after a resident's last card shares it
 MAX_ASSESSMENTS = 40
 ASSESS_RETRIES = 1
+FORECAST_ROUNDS = 3  # gated pass → forecasts → gated pass … until no new forecast is asked for
+NOTES_LEAD = timedelta(hours=6)  # notes this long before the replay grid starts still count (12-h note window)
 
 Say = Callable[[str], None]
 
@@ -61,7 +68,7 @@ class PrepareError(RuntimeError):
 
 @dataclass
 class Progress:
-    phase: str = "idle"  # idle | detecting | scoring | forecasting | assessing | done | error
+    phase: str = "idle"  # idle | detecting | notes | scoring | forecasting | assessing | done | error
     started_at: str | None = None
     finished_at: str | None = None
     step: int = 0
@@ -154,7 +161,8 @@ class GatedPass:
 
 
 async def gated_pass(conn: psycopg.AsyncConnection, night: Night, tz: ZoneInfo, *, say: Say) -> GatedPass:
-    """The live evaluator and alert gate over the replay grid, as_of each step (the replay engine's grid)."""
+    """The live evaluator and alert gate over the replay grid, as_of each step (the replay engine's grid); each
+    step is upserted into replay_snapshots (a later pass overwrites an earlier one in place)."""
     ctx = await ev.load_context(conn)
     gate, clock = AlertGate(), NightClock(tz=tz)
     grid = night.grid()
@@ -209,6 +217,10 @@ async def gated_pass(conn: psycopg.AsyncConnection, night: Night, tz: ZoneInfo, 
 
 
 # --------------------------------------------------------------------------- 4. AI cards
+
+
+def _tick() -> None:
+    progress.step += 1
 
 
 def plan_assessments(
@@ -288,15 +300,17 @@ async def run_assessments(
         progress.step += 1
         say(f"  card         R-{r['resident_id']} {r['as_of'][11:16]}Z {r['trigger']} {r.get('label', '')}: "
             f"{r['status']} {r.get('headline') or r.get('error') or ''}")  # fmt: skip
+    await assessor.drain()  # the Snowflake copies (CORE.AI_ASSESSMENTS) land before prepare reports done
     return sorted(results, key=lambda r: (r["as_of"], r["resident_id"]))
 
 
 # --------------------------------------------------------------------------- orchestration
 
 
-async def prepare(*, force_detect: bool = False, force_assess: bool = False, assess: bool = True,
-                  say: Say = log.info) -> dict:  # fmt: skip
-    """Run all four steps and store `sim_meta.replay_prepared`. Returns that summary."""
+async def prepare(*, force_detect: bool = False, force_assess: bool = False, force_deep: bool = False,
+                  assess: bool = True, say: Say = log.info) -> dict:  # fmt: skip
+    """Run every step and store `sim_meta.replay_prepared`. Returns that summary. `force_deep`: redo the note
+    extractions and forecasts already cached for the night."""
     settings = get_settings()
     tz = ZoneInfo(settings.facility_tz)
     t0 = time.perf_counter()
@@ -315,12 +329,39 @@ async def prepare(*, force_detect: bool = False, force_assess: bool = False, ass
             await tiger.set_meta(conn, PREPARED_KEY, {"in_progress": True, "started_at": progress.started_at})
             detection = await detect_night(conn, night, force=force_detect, say=say)
 
-            progress.phase, progress.step = "scoring", 0
-            gp = await gated_pass(conn, night, tz, say=say)
+            progress.phase, progress.message = "notes", "Snowflake AI_EXTRACT on the night's nurse notes"
+            note_summary = await notes.prepare_night_notes(conn, night.anchor - NOTES_LEAD, night.end,
+                                                           force=force_deep, say=say)  # fmt: skip
+            say(f"  notes        {note_summary['notes']} notes · {note_summary['extracted']} extracted · "
+                f"{note_summary['cached']} cached · {note_summary['failed']} failed")  # fmt: skip
 
-            progress.phase, progress.message = "forecasting", "Forecast hook (Phase 9)"
-            forecasts = await forecast.prepare_replay_forecasts(conn, gp.entered_high)
-            say(f"  forecasts    {forecasts['requested']} residents entering HIGH/CRITICAL · {forecasts['status']}")
+            forecasts: dict = {"rounds": []}
+            planned: set[tuple[int, datetime]] = set()
+            settled = None  # the stored pass that asked for no new forecast (every forecast it uses was in place)
+            for rnd in range(1, FORECAST_ROUNDS + 1):
+                progress.phase, progress.step = "scoring", 0
+                gp = await gated_pass(conn, night, tz, say=say)
+                plan = forecast.plan_replay(gp.transitions, night.end, set(CAST_IDS))
+                new = [p for p in plan if p not in planned]
+                if not new:
+                    settled = gp
+                    break
+                planned.update(new)
+                progress.phase, progress.message = "forecasting", f"Snowflake FORECAST, round {rnd}: {len(new)} to make"
+                progress.total, progress.step = len(new), 0
+                r = await forecast.prepare_replay_forecasts(conn, new, force=force_deep, say=say,
+                                                            on_done=_tick)  # fmt: skip
+                forecasts["rounds"].append({k: v for k, v in r.items() if k != "callouts"})
+                forecasts.setdefault("callouts", []).extend(r.get("callouts") or [])
+            forecasts |= {"requested": len(planned), "stored": sum(r.get("stored", 0) for r in forecasts["rounds"]),
+                          "cached": sum(r.get("cached", 0) for r in forecasts["rounds"]),
+                          "failed": sum(r.get("failed", 0) for r in forecasts["rounds"]),
+                          "status": "done", "train_hours": forecast.train_hours()}  # fmt: skip
+            say(f"  forecasts    {forecasts['requested']} asked for in {len(forecasts['rounds'])} round(s) · "
+                f"{forecasts['stored']} made · {forecasts['cached']} cached · {forecasts['failed']} failed")  # fmt: skip
+            if settled is None:  # the last round made forecasts: score once more with them in place
+                progress.phase, progress.step = "scoring", 0
+                gp = await gated_pass(conn, night, tz, say=say)
 
             plan = plan_assessments(list(night.bookmarks), gp.alerts)
             progress.phase = "assessing"
@@ -343,6 +384,7 @@ async def prepare(*, force_detect: bool = False, force_assess: bool = False, ass
                 "transitions": {str(k): v for k, v in gp.transitions.items()},
                 "cast": {str(k): v for k, v in gp.cast.items()},
                 "forecasts": forecasts,
+                "notes": note_summary,
                 "assessments": cards,
                 "assessments_summary": {"planned": len(plan), **counts},
             }
@@ -361,7 +403,7 @@ def running() -> bool:
     return _task is not None and not _task.done()
 
 
-def launch(*, force_detect: bool = False, force_assess: bool = False) -> None:
+def launch(*, force_detect: bool = False, force_assess: bool = False, force_deep: bool = False) -> None:
     """Start `prepare` in the backend (POST /api/replay/prepare); progress is polled via GET /api/replay."""
     global _task
     if running():
@@ -371,7 +413,7 @@ def launch(*, force_detect: bool = False, force_assess: bool = False) -> None:
         from app.sim.replay import get_engine
 
         try:
-            await prepare(force_detect=force_detect, force_assess=force_assess)
+            await prepare(force_detect=force_detect, force_assess=force_assess, force_deep=force_deep)
             eng = get_engine()
             await eng.refresh_meta()
             if eng.active:

@@ -1,0 +1,359 @@
+# Cortex Analyst semantic model for "Ask the facility" (SPEC §9 ⑧).
+# Uploaded to @VIGIL.CORE.SEMANTIC/vigil.yaml by app/deep/analyst.py (on first use, and whenever this file changes).
+# Timestamps in VIGIL.CORE are TIMESTAMP_NTZ holding UTC; every *_local column converts them to facility time.
+# "Night" = 22:00–07:00 facility time; night_of = the date the night began (the evening's date), so
+# "last night" = night_of = yesterday in facility time.
+name: vigil_facility
+description: >-
+  Sunrise Gardens Skilled Nursing Facility (synthetic data): 120 residents in three units (East long-term care,
+  West post-acute rehab, Memory Care), their 15-minute vital-sign summaries from wristbands and bed sensors,
+  staff checks, nurse notes, bed exits and Vigil alerts. Facility time zone America/Los_Angeles.
+
+tables:
+  - name: residents
+    description: One row per resident (current roster).
+    base_table: {database: VIGIL, schema: CORE, table: RESIDENTS}
+    primary_key: {columns: [resident_id]}
+    dimensions:
+      - name: resident_id
+        synonyms: [resident number, R-number]
+        description: Resident ID (1-120).
+        expr: RESIDENT_ID
+        data_type: NUMBER
+        unique: true
+      - name: resident_name
+        synonyms: [name, resident]
+        expr: NAME
+        data_type: VARCHAR
+      - name: unit
+        synonyms: [wing, ward, floor]
+        description: East (long-term care), West (post-acute / rehab) or Memory Care (dementia).
+        expr: UNIT
+        data_type: VARCHAR
+        sample_values: [East, West, Memory Care]
+      - name: room
+        expr: ROOM
+        data_type: VARCHAR
+      - name: sex
+        expr: SEX
+        data_type: VARCHAR
+        sample_values: [F, M]
+      - name: mobility
+        expr: MOBILITY
+        data_type: VARCHAR
+        sample_values: [independent, 1-assist, 2-assist, bedbound]
+      - name: cognition
+        expr: COGNITION
+        data_type: VARCHAR
+        sample_values: [intact, mild, moderate, severe]
+      - name: code_status
+        synonyms: [resuscitation status, DNR status]
+        expr: CODE_STATUS
+        data_type: VARCHAR
+        sample_values: [FULL, DNR, DNR-DNI, COMFORT]
+    facts:
+      - name: age
+        expr: AGE
+        data_type: NUMBER
+      - name: morse_fall_score
+        synonyms: [fall risk score, morse]
+        expr: MORSE
+        data_type: NUMBER
+
+  - name: vitals_15m
+    description: >-
+      Vital signs per resident per closed 15-minute bucket (from the Tiger vitals_15m continuous aggregate).
+      Respiratory rate is measured by the bed sensor only while the resident is in bed.
+    base_table: {database: VIGIL, schema: CORE, table: VITALS_15M}
+    time_dimensions:
+      - name: bucket_ts_local
+        synonyms: [time, timestamp]
+        description: Start of the 15-minute bucket, facility local time.
+        expr: CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', BUCKET_TS)
+        data_type: TIMESTAMP_NTZ
+      - name: night_of
+        synonyms: [night]
+        description: For buckets between 22:00 and 07:00, the date the night began (the evening's date).
+        expr: >-
+          IFF(HOUR(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', BUCKET_TS)) < 12,
+              DATEADD(day, -1, CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', BUCKET_TS)::DATE),
+              CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', BUCKET_TS)::DATE)
+        data_type: DATE
+    dimensions:
+      - name: resident_id
+        expr: RESIDENT_ID
+        data_type: NUMBER
+      - name: is_night
+        synonyms: [overnight, at night, night time]
+        description: TRUE between 22:00 and 07:00 facility time.
+        expr: >-
+          (HOUR(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', BUCKET_TS)) >= 22
+           OR HOUR(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', BUCKET_TS)) < 7)
+        data_type: BOOLEAN
+    facts:
+      - name: heart_rate
+        synonyms: [HR, pulse, heart rate average]
+        description: Average heart rate in the bucket (bpm).
+        expr: HR_AVG
+        data_type: FLOAT
+      - name: respiratory_rate
+        synonyms: [RR, breathing rate, respiration]
+        description: Average respiratory rate in the bucket (breaths/min), while in bed.
+        expr: RR_AVG
+        data_type: FLOAT
+      - name: spo2_min
+        synonyms: [SpO2, oxygen saturation, oxygen]
+        description: Lowest SpO2 reading in the bucket (%).
+        expr: SPO2_MIN
+        data_type: FLOAT
+      - name: skin_temp
+        synonyms: [skin temperature, wrist temperature]
+        description: Average wrist skin temperature (°C). Not core body temperature.
+        expr: SKIN_TEMP_AVG
+        data_type: FLOAT
+      - name: movement
+        synonyms: [motion, activity]
+        description: Wrist movement counts summed over the bucket.
+        expr: MOTION_SUM
+        data_type: FLOAT
+      - name: in_bed_fraction
+        expr: IN_BED_FRAC
+        data_type: FLOAT
+    metrics:
+      - name: avg_heart_rate
+        expr: AVG(vitals_15m.heart_rate)
+      - name: avg_respiratory_rate
+        expr: AVG(vitals_15m.respiratory_rate)
+
+  - name: events
+    description: >-
+      Every resident event: bed_exit, bed_return, check_logged, note_added, intake_logged, spot_check,
+      fall_suspected, device_offline, device_online, alert_raised, alert_resolved.
+    base_table: {database: VIGIL, schema: CORE, table: EVENTS}
+    time_dimensions:
+      - name: event_ts_local
+        expr: CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', TS)
+        data_type: TIMESTAMP_NTZ
+      - name: night_of
+        description: For events between 22:00 and 07:00, the date the night began (the evening's date).
+        expr: >-
+          IFF(HOUR(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', TS)) < 12,
+              DATEADD(day, -1, CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', TS)::DATE),
+              CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', TS)::DATE)
+        data_type: DATE
+    dimensions:
+      - name: resident_id
+        expr: RESIDENT_ID
+        data_type: NUMBER
+      - name: event_type
+        synonyms: [type]
+        expr: TYPE
+        data_type: VARCHAR
+        sample_values: [bed_exit, bed_return, check_logged, note_added, fall_suspected, alert_raised]
+      - name: is_night
+        synonyms: [overnight]
+        description: TRUE between 22:00 and 07:00 facility time.
+        expr: >-
+          (HOUR(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', TS)) >= 22
+           OR HOUR(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', TS)) < 7)
+        data_type: BOOLEAN
+
+  - name: checks
+    description: Staff bedside checks (rounds, call lights, responses to Vigil), one row per check.
+    base_table: {database: VIGIL, schema: CORE, table: CHECKS}
+    time_dimensions:
+      - name: check_ts_local
+        expr: CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', TS)
+        data_type: TIMESTAMP_NTZ
+      - name: night_of
+        description: For checks between 22:00 and 07:00, the date the night began (the evening's date).
+        expr: >-
+          IFF(HOUR(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', TS)) < 12,
+              DATEADD(day, -1, CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', TS)::DATE),
+              CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', TS)::DATE)
+        data_type: DATE
+    dimensions:
+      - name: resident_id
+        expr: RESIDENT_ID
+        data_type: NUMBER
+      - name: staff_id
+        expr: STAFF_ID
+        data_type: NUMBER
+      - name: check_kind
+        expr: KIND
+        data_type: VARCHAR
+      - name: is_night
+        synonyms: [overnight]
+        expr: >-
+          (HOUR(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', TS)) >= 22
+           OR HOUR(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', TS)) < 7)
+        data_type: BOOLEAN
+
+  - name: alerts
+    description: Vigil alerts. event = raised when a resident's tier rises into HIGH or CRITICAL (or a new rule fires).
+    base_table: {database: VIGIL, schema: CORE, table: ALERTS}
+    time_dimensions:
+      - name: alert_ts_local
+        expr: CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', TS)
+        data_type: TIMESTAMP_NTZ
+    dimensions:
+      - name: resident_id
+        expr: RESIDENT_ID
+        data_type: NUMBER
+      - name: alert_event
+        expr: EVENT
+        data_type: VARCHAR
+        sample_values: [raised, resolved]
+      - name: tier
+        synonyms: [priority, severity]
+        expr: TIER
+        data_type: VARCHAR
+        sample_values: [CRITICAL, HIGH, WATCH, STABLE]
+      - name: rule
+        description: The fast-tier rule behind the alert, if any (fall, fall_prevention, unresponsive, ...).
+        expr: RULE
+        data_type: VARCHAR
+    facts:
+      - name: score
+        expr: SCORE
+        data_type: FLOAT
+
+  - name: nurse_notes
+    description: Nurse and aide notes (typed or voice).
+    base_table: {database: VIGIL, schema: CORE, table: NURSE_NOTES}
+    time_dimensions:
+      - name: note_ts_local
+        expr: CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', TS)
+        data_type: TIMESTAMP_NTZ
+    dimensions:
+      - name: resident_id
+        expr: RESIDENT_ID
+        data_type: NUMBER
+      - name: author_role
+        expr: AUTHOR_ROLE
+        data_type: VARCHAR
+        sample_values: [CNA, LPN, RN]
+      - name: note_text
+        expr: TEXT
+        data_type: VARCHAR
+      - name: routine
+        expr: ROUTINE
+        data_type: BOOLEAN
+
+relationships:
+  - name: vitals_to_residents
+    left_table: vitals_15m
+    right_table: residents
+    relationship_columns: [{left_column: resident_id, right_column: resident_id}]
+    join_type: left_outer
+    relationship_type: many_to_one
+  - name: events_to_residents
+    left_table: events
+    right_table: residents
+    relationship_columns: [{left_column: resident_id, right_column: resident_id}]
+    join_type: left_outer
+    relationship_type: many_to_one
+  - name: checks_to_residents
+    left_table: checks
+    right_table: residents
+    relationship_columns: [{left_column: resident_id, right_column: resident_id}]
+    join_type: left_outer
+    relationship_type: many_to_one
+  - name: alerts_to_residents
+    left_table: alerts
+    right_table: residents
+    relationship_columns: [{left_column: resident_id, right_column: resident_id}]
+    join_type: left_outer
+    relationship_type: many_to_one
+  - name: notes_to_residents
+    left_table: nurse_notes
+    right_table: residents
+    relationship_columns: [{left_column: resident_id, right_column: resident_id}]
+    join_type: left_outer
+    relationship_type: many_to_one
+
+verified_queries:
+  - name: bed_exits_last_night
+    question: Which residents had more than 3 bed exits last night?
+    use_as_onboarding_question: true
+    verified_by: Vigil
+    verified_at: 1792368000
+    sql: |
+      SELECT r.resident_name, r.room, r.unit, COUNT(*) AS bed_exits
+      FROM __events AS e
+      JOIN __residents AS r ON e.resident_id = r.resident_id
+      WHERE e.event_type = 'bed_exit'
+        AND e.is_night
+        AND e.night_of = DATEADD(day, -1, CONVERT_TIMEZONE('America/Los_Angeles', CURRENT_TIMESTAMP())::DATE)
+      GROUP BY r.resident_name, r.room, r.unit
+      HAVING COUNT(*) > 3
+      ORDER BY bed_exits DESC, r.resident_name
+  - name: memory_care_night_hr_week
+    question: Average night heart rate for Memory Care over the past week.
+    use_as_onboarding_question: true
+    verified_by: Vigil
+    verified_at: 1792368000
+    sql: |
+      SELECT v.night_of, ROUND(AVG(v.heart_rate), 1) AS avg_night_heart_rate
+      FROM __vitals_15m AS v
+      JOIN __residents AS r ON v.resident_id = r.resident_id
+      WHERE r.unit = 'Memory Care'
+        AND v.is_night
+        AND v.night_of >= DATEADD(day, -7, CONVERT_TIMEZONE('America/Los_Angeles', CURRENT_TIMESTAMP())::DATE)
+        AND v.night_of < CONVERT_TIMEZONE('America/Los_Angeles', CURRENT_TIMESTAMP())::DATE
+      GROUP BY v.night_of
+      ORDER BY v.night_of
+  - name: least_checked_overnight
+    question: Which residents were checked least often overnight?
+    use_as_onboarding_question: true
+    verified_by: Vigil
+    verified_at: 1792368000
+    sql: |
+      SELECT r.resident_name, r.room, r.unit, COUNT(c.resident_id) AS checks_overnight
+      FROM __residents AS r
+      LEFT JOIN __checks AS c
+        ON c.resident_id = r.resident_id
+        AND c.is_night
+        AND c.night_of = DATEADD(day, -1, CONVERT_TIMEZONE('America/Los_Angeles', CURRENT_TIMESTAMP())::DATE)
+      GROUP BY r.resident_name, r.room, r.unit
+      ORDER BY checks_overnight, r.resident_name
+      LIMIT 10
+  - name: alerts_by_unit_tier_week
+    question: Alerts by unit and tier this week.
+    use_as_onboarding_question: true
+    verified_by: Vigil
+    verified_at: 1792368000
+    sql: |
+      SELECT r.unit, a.tier, COUNT(*) AS alerts
+      FROM __alerts AS a
+      JOIN __residents AS r ON a.resident_id = r.resident_id
+      WHERE a.alert_event = 'raised'
+        AND a.alert_ts_local >= DATEADD(day, -7, CONVERT_TIMEZONE('America/Los_Angeles', CURRENT_TIMESTAMP()))
+      GROUP BY r.unit, a.tier
+      ORDER BY r.unit, a.tier
+  - name: rr_rise_vs_7day
+    question: Residents whose respiratory rate rose more than 15% vs their 7-day average.
+    use_as_onboarding_question: true
+    verified_by: Vigil
+    verified_at: 1792368000
+    sql: |
+      WITH recent AS (
+        SELECT resident_id, AVG(respiratory_rate) AS rr_last_24h
+        FROM __vitals_15m
+        WHERE bucket_ts_local >= DATEADD(hour, -24, CONVERT_TIMEZONE('America/Los_Angeles', CURRENT_TIMESTAMP()))
+        GROUP BY resident_id
+      ), baseline AS (
+        SELECT resident_id, AVG(respiratory_rate) AS rr_7day_avg
+        FROM __vitals_15m
+        WHERE bucket_ts_local >= DATEADD(day, -8, CONVERT_TIMEZONE('America/Los_Angeles', CURRENT_TIMESTAMP()))
+          AND bucket_ts_local < DATEADD(hour, -24, CONVERT_TIMEZONE('America/Los_Angeles', CURRENT_TIMESTAMP()))
+        GROUP BY resident_id
+      )
+      SELECT r.resident_name, r.room, r.unit, ROUND(b.rr_7day_avg, 1) AS rr_7day_avg,
+             ROUND(x.rr_last_24h, 1) AS rr_last_24h,
+             ROUND(100 * (x.rr_last_24h - b.rr_7day_avg) / b.rr_7day_avg, 1) AS pct_change
+      FROM recent AS x
+      JOIN baseline AS b ON x.resident_id = b.resident_id
+      JOIN __residents AS r ON x.resident_id = r.resident_id
+      WHERE x.rr_last_24h > 1.15 * b.rr_7day_avg
+      ORDER BY pct_change DESC

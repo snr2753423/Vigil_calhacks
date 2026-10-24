@@ -125,7 +125,7 @@ async def load_prepared(conn) -> dict | None:
 def prepared_summary(prepared: dict | None) -> dict | None:
     if not prepared:
         return None
-    keys = ("prepared_at", "seconds", "step_s", "detection", "gated", "assessments_summary", "forecasts")
+    keys = ("prepared_at", "seconds", "step_s", "detection", "gated", "assessments_summary", "forecasts", "notes")
     return {k: prepared.get(k) for k in keys}
 
 

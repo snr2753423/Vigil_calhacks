@@ -670,14 +670,20 @@ class AlvarezDrift(_NightScript):
 
 
 class LeeFluidOverload(_NightScript):
-    """Henry Lee (42): CHF fluid overload on metoprolol. RR 17 → 26 by 02:30, SpO2 95 → 90, HR only +6
-    (beta-blocker masking). RN assessment at 03:00; O2 and head of bed raised → partial improvement."""
+    """Henry Lee (42): CHF fluid overload on metoprolol. RR 17 → 26, crossing 25 around 03:00; SpO2 95 → 90 by
+    ~03:15; HR only +6 (beta-blocker masking). RN assessment at 03:20; O2 and head of bed raised → partial
+    improvement. (Phase 9: the climb was ~45 min earlier; with P_trend live, his RR forecast then held him above
+    Alvarez at 02:14. From 04:30 on the curve is unchanged.)"""
 
-    RR_DELTA = [(21, 0), (23, 1.5), (24, 3), (25, 4.5), (25.5, 5.5), (26, 7), (26.5, 10), (27 + 5 / 60, 10),
-                (28, 8), (30.5, 6), (32.5, 5), (36, 0)]  # fmt: skip
-    SPO2_DELTA = [(21, 0), (23, -1), (24.5, -2.5), (25.5, -3.5), (26.5, -5), (27 + 5 / 60, -5), (27.5, -2),
-                  (30.5, -1), (36, 0)]  # fmt: skip
-    HR_DELTA = [(21, 0), (26.5, 6), (27 + 5 / 60, 6), (30.5, 4), (36, 0)]
+    RN_H = 27 + 20 / 60  # 03:20 RN assessment; O2 started with the 03:25 note
+    # gentle until 01:45, a visible step to 02:15 (the forecast asked ~02:28 sees it), then easing to 25 by ~03:00
+    RR_DELTA = [(21, 0), (23, 1), (24, 2), (25, 3), (25.5, 3.8), (25.75, 4.2), (26.25, 6.6), (26.5, 7.3), (27, 9), (27.5, 10),
+                (27 + 55 / 60, 10), (28.5, 7.6), (30.5, 6), (32.5, 5), (36, 0)]  # fmt: skip
+    SPO2_DELTA = [(21, 0), (23, -0.5), (24.5, -1), (25.5, -1.5), (26.25, -2), (26.75, -3.5), (27, -4.5), (27.25, -5),
+                  (RN_H + 5 / 60, -5), (27 + 55 / 60, -2.3), (28.5, -2 + 1 / 3), (30.5, -1), (36, 0)]  # fmt: skip
+    # (28.5, …) points sit on the pre-Phase-9 lines, so 04:30 onward is unchanged
+    HR_DELTA = [(21, 0), (27, 6), (RN_H + 5 / 60, 6), (28.5, 6 - 2 * (28.5 - 27 - 5 / 60) / (30.5 - 27 - 5 / 60)),
+                (30.5, 4), (36, 0)]  # fmt: skip
 
     def __init__(self, night: date, tz: ZoneInfo):
         super().__init__(42, night, tz, start_h=21)
@@ -690,9 +696,9 @@ class LeeFluidOverload(_NightScript):
         self.drop_routine_notes(plan)
         rn = fac.staff_on_duty("RN", 3)
         plan.events += [
-            self.event(27.0, "check_logged", rn, {"kind": "assessment"}),
-            self.event(27 + 2 / 60, "spot_check", rn, {"sbp": 146, "dbp": 84, "temp_c": 36.9, "method": "oral"}),
-            self.event(27 + 5 / 60, "note_added", rn, {
+            self.event(self.RN_H, "check_logged", rn, {"kind": "assessment"}),
+            self.event(self.RN_H + 2 / 60, "spot_check", rn, {"sbp": 146, "dbp": 84, "temp_c": 36.9, "method": "oral"}),
+            self.event(self.RN_H + 5 / 60, "note_added", rn, {
                 "text": "Henry: breathing faster and more labored, crackles at both lung bases, ankles more swollen "
                         "than yesterday. Head of bed raised, O2 2 L/min started per standing order. Provider "
                         "notified; DNR, hospital transfer OK per care plan.",
@@ -843,15 +849,16 @@ def scripted_night(night: date, tz: ZoneInfo) -> dict[int, list[Scenario]]:
     return scenarios
 
 
-# Replay bookmarks (SPEC §4): (hours after the night's evening midnight, resident, label). Alvarez's times are
-# the gated replay's (Phase 5/8): WATCH and #1 at 23:12, HIGH at 01:34, #1 again at 02:14 (HIGH 63) after trading
-# places with Lee, and the 02:20 note once the late round reaches her.
+# Replay bookmarks (SPEC §4): (hours after the night's evening midnight, resident, label). Times are the gated
+# replay's (Phase 9, with P_trend): Alvarez WATCH and #1 at 23:12, HIGH at 01:34, #1 (from 01:12) and HIGH 63 at
+# 02:14 when her late round is due, the 02:20 note once it reaches her; Lee's first RR forecast crossing (25 by
+# ~04:15) is known at 02:30, before his RR reaches 25 (~03:00).
 BOOKMARKS = (
     (23 + 12 / 60, 17, "Alvarez first deviation (WATCH)"),
-    (25.5, 42, "Lee forecast warning"),
     (25 + 34 / 60, 17, "Alvarez reaches HIGH"),
-    (26 + 14 / 60, 17, "Alvarez reaches #1"),
+    (26 + 14 / 60, 17, "Alvarez at #1"),
     (26 + 20 / 60, 17, "Alvarez confusion noted"),
+    (26.5, 42, "Lee forecast warning"),
     (27 + 20 / 60, 101, "Patel immobility"),
     (28 + 5 / 60, 110, "Ortiz fall"),
 )

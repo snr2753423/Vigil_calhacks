@@ -19,7 +19,7 @@ from app.api.deps import facility_tz
 from app.config import get_settings
 from app.db import snowflake_rest, tiger
 from app.db import snowflake_sql as sf
-from app.deep import anomaly, assess, sync
+from app.deep import anomaly, assess, forecast, sync
 from app.devices.ingest import ingest
 from app.sim import live_loop, outcome
 
@@ -100,7 +100,22 @@ FEATURE_TEXT = {
     "rest.sql_api.inventory": "this panel's inventory (SHOW models / services, counts)",
     "rest.cortex_search": "care-plan chunks for each AI card (filtered by resident)",
     "rest.inference_complete": "tried first for each card; refused for this account (403), falls back to the SQL API",
-    "rest.cortex_analyst": "Ask the facility (Phase 9)",
+    "rest.cortex_analyst": "Ask the facility: question → interpretation + SQL (005_semantic.yaml)",
+    "rest.sql_api.analyst_exec": "run Cortex Analyst's SQL (read-only) for Ask the facility",
+    "rest.sql_api.note_extract": "AI_EXTRACT on each nurse note (confusion, intake, concern, …)",
+    "rest.sql_api.store_note_extract": "INSERT into CORE.NOTE_EXTRACTS",
+    "rest.sql_api.transcribe": "AI_TRANSCRIBE on voice notes (@CORE.NOTE_AUDIO)",
+    "rest.sql_api.handoff_agg": "AI_AGG shift handoff: SBAR sections over the shift's rows",
+    "rest.sql_api.handoff_sbar": "AI_AGG … GROUP BY resident: one SBAR line per flagged resident",
+    "rest.sql_api.store_handoff": "INSERT into CORE.HANDOFFS",
+    "rest.sql_api.read_handoff": "read the latest CORE.HANDOFFS row for a shift",
+    "forecast.train": "CREATE SNOWFLAKE.ML.FORECAST (single-series, trailing 4 h, per metric)",
+    "forecast.predict": "CALL …!FORECAST (16 × 15 min, 90 % interval)",
+    "forecast.inputs": "FORECAST training-window size and last observed value",
+    "forecast.drop": "DROP the per-request FORECAST model",
+    "forecast.store": "write CORE.FORECAST_RESULTS",
+    "notes.put_audio": "PUT voice notes to @CORE.NOTE_AUDIO",
+    "analyst.put_semantic_model": "PUT the semantic model to @CORE.SEMANTIC",
     "anomaly.detect": "CALL ML.AD_*!DETECT_ANOMALIES (SNOWFLAKE.ML.ANOMALY_DETECTION)",
     "anomaly.train": "CREATE SNOWFLAKE.ML.ANOMALY_DETECTION (training)",
     "anomaly.store": "write CORE.ANOMALY_RESULTS",
@@ -168,6 +183,9 @@ async def snowflake_inventory(force: bool = False) -> dict:
                       (SELECT COUNT(*) FROM VIGIL.CORE.VITALS_15M) AS vitals_15m_rows,
                       (SELECT COUNT(*) FROM VIGIL.CORE.EVENTS) AS event_rows,
                       (SELECT COUNT(*) FROM VIGIL.CORE.AI_ASSESSMENTS) AS assessments,
+                      (SELECT COUNT(DISTINCT RESIDENT_ID, AS_OF) FROM VIGIL.CORE.FORECAST_RESULTS) AS forecasts,
+                      (SELECT COUNT(*) FROM VIGIL.CORE.NOTE_EXTRACTS) AS note_extracts,
+                      (SELECT COUNT(*) FROM VIGIL.CORE.HANDOFFS) AS handoffs,
                       (SELECT COUNT(*) FROM VIGIL.DOCS.CARE_PLAN_DOCS) AS care_plan_docs,
                       (SELECT COUNT(*) FROM VIGIL.DOCS.CARE_PLAN_CHUNKS) AS care_plan_chunks,
                       (SELECT COUNT(DISTINCT RESIDENT_ID) FROM VIGIL.DOCS.CARE_PLAN_CHUNKS) AS care_plan_residents""",
@@ -223,6 +241,7 @@ async def snowflake_stats(inventory: bool = True, refresh: bool = False) -> dict
         "sync": sync.stats.to_dict(),
         "detection": anomaly.stats.to_dict(),
         "assessments": assess.get_assessor().stats.to_dict(),
+        "forecasts": forecast.stats.to_dict(),
         "rest": snowflake_rest.client().status(),
         "sync_state": None,
         "models": None,

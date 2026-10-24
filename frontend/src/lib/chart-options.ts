@@ -11,6 +11,9 @@ export const BAND = "rgba(148,163,184,0.22)"; // the resident's usual range
 export const EXPECTED = "rgba(129,140,248,0.16)"; // Snowflake model's expected range (99 % interval)
 export const EXPECTED_EDGE = "rgba(165,180,252,0.75)";
 export const ANOMALY = "#fbbf24"; // amber diamonds: buckets Snowflake flagged
+export const FORECAST = "#fcd34d"; // amber dashed: the Snowflake FORECAST
+export const FORECAST_BAND = "rgba(252,211,77,0.13)";
+export const THRESHOLD = "rgba(248,113,113,0.85)"; // the NEWS2 3-point threshold a forecast crosses
 export const ZONE = { 1: "rgba(252,211,77,0.16)", 2: "rgba(251,146,60,0.2)", 3: "rgba(239,68,68,0.22)" } as const;
 
 type Series = (number | null)[];
@@ -18,7 +21,7 @@ type Pair = [number, number | null];
 
 const pairs = (ts: number[], v: Series): Pair[] => ts.map((t, i) => [t, v[i] ?? null]);
 
-function frame(ts: number[], longRange: boolean, height: number): EChartsOption {
+function frame(ts: number[], longRange: boolean, height: number, xMax?: number): EChartsOption {
   const fmt = (v: number) => (longRange ? facilityDayHHMM(v) : facilityHHMM(v));
   return {
     animation: false,
@@ -26,7 +29,7 @@ function frame(ts: number[], longRange: boolean, height: number): EChartsOption 
     xAxis: {
       type: "time",
       min: ts[0],
-      max: ts[ts.length - 1],
+      max: Math.max(ts[ts.length - 1], xMax ?? 0),
       axisLabel: { show: height > 100, color: INK.muted, fontSize: 12, formatter: fmt, hideOverlap: true },
       axisLine: { lineStyle: { color: INK.axis } },
       axisTick: { show: false },
@@ -91,7 +94,65 @@ const bandSeries = (ts: number[], band: Band, stack: string) => [
 
 const EXPECTED_NAME = "Expected range";
 const ANOMALY_NAME = "Anomaly";
-const OVERLAYS = new Set(["Usual range", EXPECTED_NAME, ANOMALY_NAME]);
+const FORECAST_NAME = "Snowflake forecast";
+const FORECAST_RANGE_NAME = "Forecast range";
+const OVERLAYS = new Set(["Usual range", EXPECTED_NAME, ANOMALY_NAME, FORECAST_NAME, FORECAST_RANGE_NAME]);
+
+/** A Snowflake FORECAST drawn past the last reading: points, their 90 % interval, and the NEWS2 3-point threshold
+ *  it crosses (if any). */
+export type ForecastOverlay = {
+  ts: number[];
+  value: (number | null)[];
+  lower: (number | null)[];
+  upper: (number | null)[];
+  threshold: number | null;
+};
+
+const forecastSeries = (f: ForecastOverlay) => [
+  {
+    name: "_fc_lower",
+    type: "line" as const,
+    data: pairs(f.ts, f.lower),
+    stack: "forecast",
+    lineStyle: { opacity: 0 },
+    showSymbol: false,
+    silent: true,
+    tooltip: { show: false },
+    z: 2,
+  },
+  {
+    name: FORECAST_RANGE_NAME,
+    type: "line" as const,
+    data: pairs(f.ts, f.upper.map((u, i) => (u === null || f.lower[i] === null ? null : u - (f.lower[i] as number)))),
+    stack: "forecast",
+    lineStyle: { opacity: 0 },
+    areaStyle: { color: FORECAST_BAND },
+    showSymbol: false,
+    silent: true,
+    tooltip: { show: false },
+    z: 2,
+  },
+  {
+    name: FORECAST_NAME,
+    type: "line" as const,
+    data: pairs(f.ts, f.value),
+    showSymbol: false,
+    lineStyle: { width: 2, type: "dashed" as const, color: FORECAST },
+    itemStyle: { color: FORECAST },
+    z: 4,
+    ...(f.threshold !== null
+      ? {
+          markLine: {
+            silent: true,
+            symbol: "none",
+            label: { show: true, position: "insideEndTop" as const, color: THRESHOLD, fontSize: 11, formatter: "NEWS2 +3" },
+            lineStyle: { color: THRESHOLD, type: "dashed" as const, width: 1 },
+            data: [{ yAxis: f.threshold }],
+          },
+        }
+      : {}),
+  },
+];
 
 /** The Snowflake expected range: dashed edges around a light fill, stacked like the usual band. */
 const expectedSeries = (ts: number[], band: Band) => [
@@ -131,9 +192,9 @@ const anomalySeries = (points: AnomalyPoint[]) => ({
   z: 5,
 });
 
-type Overlays = { band?: Band; expected?: Band; anomalies?: AnomalyPoint[] };
+type Overlays = { band?: Band; expected?: Band; anomalies?: AnomalyPoint[]; forecast?: ForecastOverlay; xMax?: number };
 
-function tooltipFormatter(unit: string, digits: number, { band, expected, anomalies }: Overlays = {}) {
+function tooltipFormatter(unit: string, digits: number, { band, expected, anomalies, forecast }: Overlays = {}) {
   const flagged = new Set((anomalies ?? []).map((p) => p.t));
   const range = (b: Band | undefined, i: number) => {
     const lo = b?.lower[i];
@@ -143,6 +204,16 @@ function tooltipFormatter(unit: string, digits: number, { band, expected, anomal
   return (params: unknown) => {
     const list = (Array.isArray(params) ? params : [params]) as { seriesName: string; value: Pair; dataIndex: number }[];
     const main = list.find((p) => !p.seriesName.startsWith("_") && !OVERLAYS.has(p.seriesName));
+    const fc = list.find((p) => p.seriesName === FORECAST_NAME);
+    if ((!main || main.value[1] === null) && fc && forecast) {
+      const [t, v] = fc.value;
+      const lo = forecast.lower[fc.dataIndex];
+      const hi = forecast.upper[fc.dataIndex];
+      const range = lo == null || hi == null ? "" : `<br/>90 % range ${lo.toFixed(digits)}–${hi.toFixed(digits)}${unit}`;
+      return `<div style="font-weight:600">${facilityDayHHMM(t)}</div>Snowflake forecast: <b>${
+        v === null ? "—" : `${v.toFixed(digits)}${unit}`
+      }</b>${range}`;
+    }
     if (!main) return "";
     const [t, v] = main.value;
     const i = main.dataIndex;
@@ -159,9 +230,10 @@ function tooltipFormatter(unit: string, digits: number, { band, expected, anomal
 }
 
 /** Series for the optional Snowflake overlays. */
-const overlaySeries = (ts: number[], { expected, anomalies }: Overlays) => [
+const overlaySeries = (ts: number[], { expected, anomalies, forecast }: Overlays) => [
   ...(expected ? expectedSeries(ts, expected) : []),
   ...(anomalies?.length ? [anomalySeries(anomalies)] : []),
+  ...(forecast ? forecastSeries(forecast) : []),
 ];
 
 export function bandedLineOption(opts: {
@@ -173,30 +245,34 @@ export function bandedLineOption(opts: {
   digits: number;
   longRange: boolean;
   height: number;
-} & Pick<Overlays, "expected" | "anomalies">): EChartsOption {
-  const { ts, values, band, name, unit, digits, longRange, height, expected, anomalies } = opts;
-  const base = frame(ts, longRange, height);
+} & Pick<Overlays, "expected" | "anomalies" | "forecast" | "xMax">): EChartsOption {
+  const { ts, values, band, name, unit, digits, longRange, height, expected, anomalies, forecast, xMax } = opts;
+  const base = frame(ts, longRange, height, xMax);
   return {
     ...base,
-    tooltip: { ...(base.tooltip as object), formatter: tooltipFormatter(unit, digits, { band, expected, anomalies }) },
+    tooltip: { ...(base.tooltip as object), formatter: tooltipFormatter(unit, digits, { band, expected, anomalies, forecast }) },
     yAxis: yAxis(),
-    series: [...bandSeries(ts, band, "band"), ...overlaySeries(ts, { expected, anomalies }), line(name, pairs(ts, values))],
+    series: [
+      ...bandSeries(ts, band, "band"),
+      ...overlaySeries(ts, { expected, anomalies, forecast }),
+      line(name, pairs(ts, values)),
+    ],
   };
 }
 
 export function spo2Option(
   opts: { ts: number[]; values: Series; scale: 1 | 2; longRange: boolean; height: number } & Overlays,
 ): EChartsOption {
-  const { ts, values, scale, longRange, height, expected, anomalies } = opts;
-  const base = frame(ts, longRange, height);
-  const nums = values.filter((v): v is number => v !== null);
+  const { ts, values, scale, longRange, height, expected, anomalies, forecast, xMax } = opts;
+  const base = frame(ts, longRange, height, xMax);
+  const nums = [...values, ...(forecast?.lower ?? [])].filter((v): v is number => v !== null);
   const floor = Math.min(scale === 2 ? 82 : 88, ...nums.map((v) => Math.floor(v) - 1));
   return {
     ...base,
-    tooltip: { ...(base.tooltip as object), formatter: tooltipFormatter("%", 0, { expected, anomalies }) },
+    tooltip: { ...(base.tooltip as object), formatter: tooltipFormatter("%", 0, { expected, anomalies, forecast }) },
     yAxis: yAxis({ min: floor, max: 100, scale: false }),
     series: [
-      ...overlaySeries(ts, { expected, anomalies }),
+      ...overlaySeries(ts, { expected, anomalies, forecast }),
       {
         // SpO₂ is read every 5 min, so most 1-min buckets are empty: join the readings and mark each one.
         ...line("SpO₂", pairs(ts, values)),
@@ -219,8 +295,8 @@ export function spo2Option(
 export function deltaOption(
   opts: { ts: number[]; values: Series; longRange: boolean; height: number } & Overlays,
 ): EChartsOption {
-  const { ts, values, longRange, height, expected, anomalies } = opts;
-  const base = frame(ts, longRange, height);
+  const { ts, values, longRange, height, expected, anomalies, xMax } = opts;
+  const base = frame(ts, longRange, height, xMax);
   return {
     ...base,
     tooltip: { ...(base.tooltip as object), formatter: tooltipFormatter(" °C vs usual", 2, { expected, anomalies }) },
@@ -242,10 +318,10 @@ export function deltaOption(
 }
 
 export function motionOption(
-  opts: { ts: number[]; values: Series; longRange: boolean; height: number } & Pick<Overlays, "anomalies">,
+  opts: { ts: number[]; values: Series; longRange: boolean; height: number } & Pick<Overlays, "anomalies" | "xMax">,
 ): EChartsOption {
-  const { ts, values, longRange, height, anomalies } = opts;
-  const base = frame(ts, longRange, height);
+  const { ts, values, longRange, height, anomalies, xMax } = opts;
+  const base = frame(ts, longRange, height, xMax);
   return {
     ...base,
     tooltip: { ...(base.tooltip as object), formatter: tooltipFormatter(" counts", 0, { anomalies }) },
@@ -263,9 +339,11 @@ export function motionOption(
   };
 }
 
-export function inBedOption(opts: { ts: number[]; values: Series; longRange: boolean; height: number }): EChartsOption {
-  const { ts, values, longRange, height } = opts;
-  const base = frame(ts, longRange, height);
+export function inBedOption(
+  opts: { ts: number[]; values: Series; longRange: boolean; height: number; xMax?: number },
+): EChartsOption {
+  const { ts, values, longRange, height, xMax } = opts;
+  const base = frame(ts, longRange, height, xMax);
   return {
     ...base,
     grid: { left: 52, right: 16, top: 4, bottom: 26 },

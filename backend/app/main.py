@@ -8,10 +8,12 @@ from fastapi import FastAPI
 
 from app import __version__
 from app.api import (
+    ask,
     bench,
     checks,
     devices,
     explain,
+    handoff,
     health,
     insights,
     notes,
@@ -24,7 +26,7 @@ from app.api import (
 from app.api import replay as replay_api
 from app.config import get_settings
 from app.db import snowflake_rest, tiger
-from app.deep import assess, sync
+from app.deep import assess, forecast, sync
 from app.devices import ingest
 from app.scoring import evaluator
 from app.sim import live_loop, replay
@@ -47,6 +49,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         tasks.append(sync_task)
     if (assess_task := assess.start()) is not None:  # Cortex AI assessments on tier rise / stale top 5
         tasks.append(assess_task)
+    if (forecast_task := forecast.start()) is not None:  # Snowflake FORECAST on HIGH/CRITICAL → P_trend
+        tasks.append(forecast_task)
     if (ingest_task := ingest.start()) is not None:  # Polar band + iPhone bed sensor → Tiger every 1 s
         tasks.append(ingest_task)
     if get_settings().tiger_configured and get_settings().stats_flush_enabled:  # → Tiger snowflake_calls / 30 s
@@ -84,5 +88,7 @@ app.include_router(stats.router)
 app.include_router(bench.router)
 app.include_router(replay_api.router)
 app.include_router(devices.router)
+app.include_router(handoff.router)
+app.include_router(ask.router)
 app.include_router(hub.router)
 app.include_router(ingest.router)

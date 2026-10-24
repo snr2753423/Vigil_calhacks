@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { offsetForDisplayTime } from "@/lib/display-clock";
 import { describeEvent } from "@/lib/events";
 import { formatMinutes } from "@/lib/format";
-import type { AnomalyBucket } from "@/lib/types";
-import { anomalyPoints, appendLive, baselineBand, deltaVsBaseline, expectedBand, spo2Zones, todBlock } from "@/lib/vitals";
+import type { AnomalyBucket, Forecast } from "@/lib/types";
+import { anomalyPoints, appendLive, baselineBand, deltaVsBaseline, expectedBand, forecastOverlay, latestForecast, spo2Zones, todBlock } from "@/lib/vitals";
 
 const baselines = {
   hr: { "0": { p05: 55, p50: 60, p95: 70 }, "3": { p05: 65, p50: 72, p95: 85 } },
@@ -105,5 +105,35 @@ describe("appendLive", () => {
     const values = [70, null];
     expect(appendLive(ts, values, undefined, 0)).toEqual({ ts, values });
     expect(appendLive(ts, values, [[10, 80]], 100)).toEqual({ ts, values });
+  });
+});
+
+describe("Snowflake forecast overlay", () => {
+  const fc = (asOf: string): Forecast => ({
+    as_of: asOf, data_through: "2026-10-17T08:00:00+00:00", train_hours: 12, periods: 16, chart_periods: 2,
+    interval: 0.9, model: "SNOWFLAKE.ML.FORECAST", p_trend: 0.5, callout: "RR forecast to cross 25 by ~04:30", seconds: 80,
+    metrics: {
+      rr: {
+        points: [["2026-10-17T08:00:00+00:00", 20.7, 20.4, 21.0], ["2026-10-17T08:15:00+00:00", 21.0, 20.5, 21.6],
+                 ["2026-10-17T08:30:00+00:00", 21.4, 20.6, 22.2]],
+        n_train: 18, last_ts: "2026-10-17T07:45:00+00:00", last_value: 20.3,
+        crossing: { threshold: 25, direction: "up", bucket: "2026-10-17T11:15:00+00:00", crosses_at: "2026-10-17T11:30:00+00:00" },
+      },
+    },
+  });
+
+  it("starts at the last reading and keeps the chart's periods", () => {
+    const o = forecastOverlay(fc("2026-10-17T08:10:00Z"), "rr")!;
+    expect(o.value).toEqual([20.3, 20.7, 21.0]); // last observed + 2 chart periods
+    expect(o.ts[0]).toBe(Date.parse("2026-10-17T07:52:30Z")); // bucket centre
+    expect(o.threshold).toBe(25);
+    expect(forecastOverlay(fc("2026-10-17T08:10:00Z"), "hr")).toBeNull();
+  });
+
+  it("picks the newest forecast known and still fresh", () => {
+    const items = [fc("2026-10-17T08:10:00Z"), fc("2026-10-17T08:40:00Z")];
+    expect(latestForecast(items, Date.parse("2026-10-17T08:30:00Z"))?.as_of).toBe("2026-10-17T08:10:00Z");
+    expect(latestForecast(items, Date.parse("2026-10-17T09:00:00Z"))?.as_of).toBe("2026-10-17T08:40:00Z");
+    expect(latestForecast(items, Date.parse("2026-10-17T10:00:00Z"))).toBeNull(); // > 60 min old
   });
 });

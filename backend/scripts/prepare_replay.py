@@ -50,7 +50,7 @@ def summarize(p: dict) -> None:
 async def run(args: argparse.Namespace) -> int:
     try:
         p = await prepare.prepare(force_detect=args.force_detect, force_assess=args.force_cards,
-                                  assess=not args.no_cards, say=print)  # fmt: skip
+                                  force_deep=args.force_deep, assess=not args.no_cards, say=print)  # fmt: skip
     except prepare.PrepareError as exc:
         print(f"prepare: {exc}", file=sys.stderr)
         return 1
@@ -67,6 +67,7 @@ def main() -> int:
     parser.add_argument("--force-detect", action="store_true", help="re-run anomaly detection over the night")
     parser.add_argument("--force-cards", action="store_true", help="regenerate cached Cortex cards")
     parser.add_argument("--no-cards", action="store_true", help="skip the Cortex cards")
+    parser.add_argument("--force-deep", action="store_true", help="redo cached note extractions and forecasts")
     args = parser.parse_args()
     if not get_settings().tiger_configured:
         print("prepare: TIGER_DATABASE_URL is not set in .env", file=sys.stderr)

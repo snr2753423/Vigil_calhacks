@@ -55,3 +55,32 @@ def test_alter_user_sql() -> None:
     ]
     current = keygen.alter_user_sql("ABC", None).splitlines()
     assert current[1] == "SET vigil_user = '\"' || CURRENT_USER() || '\"';"
+
+
+def test_shared_connection_retries_only_lost_sessions() -> None:
+    from snowflake.connector import errors
+
+    from app.db import snowflake_sql as sf
+
+    assert sf.session_lost(errors.ProgrammingError(msg="Authentication token has expired", errno=390114))
+    assert sf.session_lost(errors.OperationalError(msg="connection reset"))
+    assert not sf.session_lost(errors.ProgrammingError(msg="Stage does not exist", errno=2003))
+
+    class Fake(sf.SharedConnection):
+        def __init__(self) -> None:
+            super().__init__()
+            self.logins = 0
+
+        def get(self):
+            self.logins += 1
+            return object()
+
+    shared, calls = Fake(), []
+
+    def bad_sql(conn):
+        calls.append(conn)
+        raise errors.ProgrammingError(msg="SQL compilation error", errno=1003)
+
+    with pytest.raises(errors.ProgrammingError):
+        shared.run(bad_sql)
+    assert len(calls) == 1 and shared.logins == 1  # not retried on a new login

@@ -11,6 +11,7 @@ normal", "4 bed exits tonight (usual ≤ 2)", "New confusion (note 21:30)".
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -29,6 +30,8 @@ from app.scoring.baseline import (
 from app.scoring.concern import NoteConcern, note_concern
 from app.scoring.features import Profile, ResidentFeatures
 from app.scoring.rules import NightClock, RuleHit, evaluate_rules
+from app.scoring.trend import LABEL as TREND_LABEL
+from app.scoring.trend import p_trend as forecast_p_trend
 
 Tier = Literal["CRITICAL", "HIGH", "WATCH", "STABLE"]
 TIERS: tuple[Tier, ...] = ("STABLE", "WATCH", "HIGH", "CRITICAL")  # ascending
@@ -96,6 +99,11 @@ class Components:
     multi_signal: bool = False
     anom_source: str = "tiger_z"  # snowflake when ANOMALY_DETECTION results are fresh, else the Tiger z fallback
     anom_as_of: str | None = None  # when the newest Snowflake result became known
+    trend_metric: str | None = None  # the metric whose Snowflake FORECAST crosses a NEWS2 3-point threshold
+    trend_threshold: float | None = None
+    trend_direction: str | None = None
+    trend_crosses_at: str | None = None
+    trend_as_of: str | None = None  # when that forecast became known
     # detail behind the numbers
     news2_total: int = 0
     anomalous_metrics: list[str] = field(default_factory=list)
@@ -247,7 +255,7 @@ def compute(
     baselines: Baselines,
     clock: NightClock,
     *,
-    p_trend: float = 0.0,  # Snowflake FORECAST (Phase 5+); 0 for now
+    p_trend: float | None = None,  # override (tests); default: from the resident's latest Snowflake FORECAST
 ) -> PriorityResult:
     tz: ZoneInfo = clock.tz
     rid = p.resident_id
@@ -278,16 +286,24 @@ def compute(
         still_p95 = behavior.still_minutes_p95 or 60.0
         still = min(f.still_minutes / (2 * max(still_p95, 1.0)), 1.0)
     mins_check = None if f.last_check_ts is None else (f.as_of - f.last_check_ts).total_seconds() / 60
+    trend, trend_metric, trend_cross = forecast_p_trend(f.forecast, f.as_of, p.copd)
+    if p_trend is not None:
+        trend = p_trend
 
     c = Components(
         p_news=min(news.total / NEWS2_FULL, 1.0),
         p_anom=p_anom(devs),
-        p_trend=p_trend,
+        p_trend=trend,
         p_behav=max(exits, restless, still),
         p_concern=0.0 if concern is None else concern.p_concern,
         p_overdue=1.0 if mins_check is None else min(max(mins_check, 0.0) / OVERDUE_FULL_MIN, 1.0),
         anom_source="snowflake" if sf_devs is not None else "tiger_z",
         anom_as_of=f.anomaly[0]["as_of"].isoformat() if f.anomaly else None,
+        trend_metric=trend_metric if trend else None,
+        trend_threshold=trend_cross["threshold"] if trend and trend_cross else None,
+        trend_direction=trend_cross["direction"] if trend and trend_cross else None,
+        trend_crosses_at=trend_cross["crosses_at"] if trend and trend_cross else None,
+        trend_as_of=(f.forecast or {}).get("as_of") if trend else None,
         news2_total=news.total,
         anomalous_metrics=[m for m, d in devs.items() if d.anomalous],
         bed_exits=exits,
@@ -415,6 +431,13 @@ def top_factors(
             add("concern", f"New confusion (note {when})", pts, "concern")
         elif concern.concern_level in ("med", "high"):
             add("concern", f"Staff concern (note {when})", pts, "concern")
+
+    if c.p_trend > 0 and c.trend_metric and c.trend_crosses_at:
+        when = clock.hhmm(datetime.fromisoformat(c.trend_crosses_at))
+        verb = "cross" if c.trend_direction == "up" else "fall to"
+        unit = "%" if c.trend_metric == "spo2" else ""
+        text = f"{TREND_LABEL.get(c.trend_metric, c.trend_metric)} forecast to {verb} {c.trend_threshold:g}{unit} by ~{when}"
+        add("trend", text, 100 * WEIGHTS["trend"] * c.p_trend, "trend")
 
     behav_pts = 100 * WEIGHTS["behav"] * c.p_behav
     parts = {"bed_exits": c.bed_exits, "restless": c.restlessness, "still": c.still}

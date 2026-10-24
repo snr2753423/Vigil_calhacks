@@ -25,6 +25,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
@@ -39,9 +40,10 @@ log = logging.getLogger(__name__)
 JWT_LIFETIME_S = 3600  # Snowflake's maximum
 JWT_RENEW_S = 300  # mint a new token this long before the old one expires
 ENDPOINT_RETRY_S = 1800.0
+POLL_S = 1.0  # SQL API: status poll interval for a statement still running (HTTP 202)
 BLOCKED_CODE = "003001"
 SEARCH_SERVICE = ("DOCS", "CARE_PLAN_SEARCH")
-SEMANTIC_MODEL_FILE = "@VIGIL.CORE.SEMANTIC/vigil.yaml"  # Phase 9
+SEMANTIC_MODEL_FILE = "@VIGIL.CORE.SEMANTIC/vigil.yaml"  # 005_semantic.yaml, uploaded by deep/analyst.py
 
 
 class SnowflakeRestError(RuntimeError):
@@ -277,6 +279,24 @@ class SnowflakeRest:
         cols = [c.get("name") for c in (body.get("resultSetMetaData") or {}).get("rowType") or []]
         return [dict(zip(cols, row, strict=False)) for row in body.get("data") or []]
 
+    async def sql_table(
+        self,
+        statement: str,
+        params: list[Any] | None = None,
+        *,
+        feature: str = "sql_api",
+        timeout: float = 30.0,
+        max_rows: int = 1000,
+    ) -> tuple[list[dict[str, str]], list[list[Any]]]:
+        """Like `sql`, with typed values: → ([{name, type}], rows). Numbers become int/float, DATE/TIMESTAMP ISO text
+        (the SQL API sends every value as a string, DATE as epoch days, TIMESTAMP_* as epoch seconds)."""
+        body = await self._statement(statement, params, feature=feature, timeout=timeout)
+        meta = (body.get("resultSetMetaData") or {}).get("rowType") or []
+        cols = [{"name": c.get("name") or "", "type": (c.get("type") or "text").lower(), "scale": c.get("scale") or 0}
+                for c in meta]  # fmt: skip
+        rows = [[typed(v, c) for v, c in zip(r, cols, strict=False)] for r in (body.get("data") or [])[:max_rows]]
+        return [{"name": c["name"], "type": c["type"]} for c in cols], rows
+
     async def _statement(self, statement: str, params: list[Any] | None, *, feature: str, timeout: float) -> dict:
         s = self.settings
         body: dict[str, Any] = {
@@ -288,10 +308,30 @@ class SnowflakeRest:
         }
         if params:
             body["bindings"] = {str(i): {"type": "TEXT", "value": str(v)} for i, v in enumerate(params, 1)}
+        t0 = time.monotonic()
         resp = await self._post("/api/v2/statements", body, feature=feature, timeout=timeout + 2)
-        if resp.status_code == 202:  # still running past the API's synchronous window
-            raise SnowflakeRestError(202, "statement did not finish in time")
+        # 202: still running past the API's synchronous window (~45 s): poll its status URL until done or timeout.
+        while resp.status_code == 202:
+            url = (resp.json() or {}).get("statementStatusUrl")
+            left = timeout - (time.monotonic() - t0)
+            if not url or left <= 0:
+                raise SnowflakeRestError(202, "statement did not finish in time")
+            await asyncio.sleep(min(POLL_S, max(left, 0.1)))
+            resp = await self._get(url, feature=f"{feature}.poll", timeout=max(left, 1.0) + 2)
         return resp.json()
+
+    async def _get(self, path: str, *, feature: str, timeout: float) -> httpx.Response:
+        headers = {
+            "Authorization": f"Bearer {self._jwt()}",
+            "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT",
+            "Accept": "application/json",
+            "User-Agent": "vigil/0.1",
+        }
+        with call_stats.timed(f"rest.{feature}"):
+            resp = await self._http().get(path, headers=headers, timeout=timeout)
+            if resp.status_code >= 400:
+                raise _error(resp)
+        return resp
 
     # ---- Cortex Search
 
@@ -331,6 +371,28 @@ class SnowflakeRest:
             "inference_endpoint": "blocked for this account (using SQL API)" if blocked else "ok/untested",
             "last_error": self.last_error,
         }
+
+
+def typed(v: Any, col: dict) -> Any:
+    """One SQL API value (always a string) → a JSON-friendly Python value, by its column's type."""
+    if v is None:
+        return None
+    t = col.get("type", "text")
+    try:
+        if t == "fixed":
+            return int(v) if not col.get("scale") else float(v)
+        if t == "real":
+            return float(v)
+        if t == "boolean":
+            return str(v).lower() == "true"
+        if t == "date":
+            return (datetime(1970, 1, 1) + timedelta(days=int(v))).date().isoformat()
+        if t in ("timestamp_ntz", "timestamp_ltz", "timestamp_tz"):
+            secs = float(str(v).split()[0])
+            return (datetime(1970, 1, 1) + timedelta(seconds=secs)).isoformat(timespec="seconds")
+    except (TypeError, ValueError):
+        return v
+    return v
 
 
 def _error(resp: httpx.Response) -> SnowflakeRestError:

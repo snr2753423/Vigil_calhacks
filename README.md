@@ -121,6 +121,115 @@ The layout follows SPEC §5. `backend/app/` holds `api/`, `ws/`, `db/` (`tiger.p
 
 ## Status
 
+**Phase 9 (forecast, nurse notes, shift handoff, Ask the facility): done**
+
+What works:
+- **Forecast** (`app/deep/forecast.py`, `app/scoring/trend.py`):
+  - On an alert into HIGH/CRITICAL, and every 30 min while the resident stays there, three single-series `SNOWFLAKE.ML.FORECAST` models are trained in parallel (RR_AVG, SPO2_MIN, HR_AVG over the trailing 4 h of closed `VITALS_15M` buckets, `evaluate: FALSE`). Each then runs `!FORECAST` for 16 periods with a 90 % interval and is dropped.
+  - Results go to `CORE.FORECAST_RESULTS` and Tiger `ai_insights` (kind `forecast`, as_of = when known).
+  - Forecasts run on `SNOWFLAKE_TRAIN_WAREHOUSE` (VIGIL_ML_WH) when it is set. Measured: training ~50–110 s per metric, prediction ~10–15 s. On the shared XSMALL warehouse, three trainings queued AI_EXTRACT past its timeout.
+  - **P_trend** (SPEC §7d): the first forecast bucket inside a NEWS2 3-point zone (RR ≥ 25 / ≤ 8, SpO₂ ≤ 91 or ≤ 83 on scale 2, HR ≥ 131 / ≤ 40) gives 1 within 2 h and 0.5 within 4 h. It is read from the newest forecast ≤ 60 min old.
+    - A threshold within MIN_GAP of the last value does not count (RR 1/min, SpO₂ 2 %, HR 10 bpm). Lee's SpO₂ minimum sat at 91–92 %, so without the gap every forecast "fell to 91 %". RR is a smooth average, so 1/min is a real step (Lee at 23.4 heading for 25, Patel at 9 heading for 8).
+    - Crossings, P_trend and the callout are recomputed when read, so stored forecasts follow rule changes.
+    - The new factor chip reads "RR forecast to cross 25 by ~04:15". "Why this score" names the metric and the time.
+  - **Charts**: HR / RR / SpO₂ get a dashed amber forecast line with its 90 % band for the next 2 h past the last reading, plus a red "NEWS2 +3" threshold line. A callout above the charts reads "RR forecast to cross 25 by ~04:15 · Snowflake ML.FORECAST · made 02:30 from the last 4 h". Charts follow the replay cursor.
+  - The AI assessment context lists each forecast metric's last value, its 2-h value with range, and its crossing.
+- **Nurse notes** (`app/deep/notes.py`, `POST /api/notes`, JSON or multipart):
+  - Text goes to `AI_EXTRACT` through the SQL REST API: confusion_change, oral_intake, pain, urinary symptoms, fall, breathing, mood, fever/warm, concern level and a one-line summary.
+  - Voice: the browser records (Chrome `audio/webm;codecs=opus`, iPhone Safari `audio/mp4`), the backend `PUT`s the file to `@CORE.NOTE_AUDIO`, then runs `AI_TRANSCRIBE`, then `AI_EXTRACT`. A failed transcription stores nothing and asks for a typed note.
+  - The extraction is stored in Tiger `ai_insights` (kind `note_extract`) and Snowflake `CORE.NOTE_EXTRACTS`. New or worse confusion → NEWS2 consciousness 3 and P_concern 1. The keyword reading remains the fallback when Snowflake fails, and it scores the note until AI_EXTRACT lands (waited up to 8 s; later arrivals come over `/ws/live`).
+  - `concern_level` is Vigil's deterministic reading of the extracted findings. Measured: AI_EXTRACT's own overall rating called a wristband note "med" and "slept well" "low". Its rating is kept as `ai_concern_level` and can only raise a finding-backed note to high.
+  - UI: a **Voice note** button with recording state and timer (stops at 60 s), then the transcript and chips ("Confusion: worse → NEWS2 consciousness +3", "Intake: reduced", concern level), with the source shown. The timeline labels voice notes.
+  - Prepare replay re-extracts the night's 7 non-routine notes (stamped 30 s after each note). Alvarez 21:30 → concern low, no confusion. **Alvarez 02:20 → confusion worse**, concern med.
+- **Shift handoff** (`app/deep/handoff.py`, `GET/POST /api/handoff`, `/handoff`):
+  - Gathers the shift from Tiger: tier changes and peak (`replay_snapshots` for the prepared night, else `priority_snapshots`), alerts, checks, non-routine notes with their extractions, falls, bed exits, device issues ≥ 30 min, and forecast callouts.
+  - Two `AI_AGG` calls run in parallel (SQL REST API, rows sent as JSON and FLATTENed):
+    - the sections (critical events, watch next shift, resolved, follow-ups) over one SHIFT row plus one RESIDENT row per flagged resident;
+    - one SBAR line per resident over that resident's event records, `GROUP BY` resident. Asked for both at once, AI_AGG left the SBAR out.
+  - Output is validated and softened. A missing SBAR gets the deterministic one. Device issues are listed from the data. A deterministic handoff covers Snowflake being down.
+  - Stored in `CORE.HANDOFFS`.
+  - UI: shift picker (defaults to the recorded night), Generate, the sections and SBAR table, "What Snowflake was given", and **Print** (light, chrome-free print styles).
+- **Ask the facility** (`app/deep/analyst.py`, `sql/snowflake/005_semantic.yaml`, `POST /api/ask`, `/ask`):
+  - Semantic model over RESIDENTS, VITALS_15M, EVENTS, CHECKS, ALERTS and NURSE_NOTES, with facility-time dimensions (`night_of` = the evening's date, `is_night` = 22:00–07:00) and the 5 verified queries.
+  - Uploaded with `PUT` to `@CORE.SEMANTIC/vigil.yaml` on first use and whenever the file changes.
+  - Flow: Cortex Analyst REST `message`, then a read-only guard (one SELECT/WITH, no write keywords), then the SQL REST API (≤ 500 rows).
+  - The chart is chosen from the result's shape: line over dates, bar, or bars stacked by a series column (tier colours).
+  - UI: suggested-question chips, the interpretation, a "verified query" badge, chart, table, collapsible SQL, timings, and follow-up questions with history.
+- **Decision-support wording** (`app/deep/wording.py`):
+  - Rewrites firm wording in Cortex text: "infection likely" → "infection possible", "likely UTI" → "possible UTI", "has early sepsis" → "may have early sepsis", "probably" → "possibly", "a diagnosis of" → "possible".
+  - Puts "possible" before a bare condition name with no hedge.
+  - Rejects what it cannot fix (e.g. "Diagnosis: …"); the card then falls back to the template.
+  - Care-plan quotes are never touched.
+  - The assessment prompt now bans "likely / probably / diagnosis / confirms / indicates".
+  - `MAX_TOKENS` went 1500 → 3000: the model's reasoning counts toward it, and three of Lee's cards were cut off mid-JSON.
+- **Prepare replay** now runs: detection → notes (AI_EXTRACT) → gated pass → forecasts where live would ask → gated pass again with P_trend in place (repeated until no new forecast is asked for) → cards. A new admin option, "redo forecasts and note extraction", forces those two steps. Replay still never calls Snowflake.
+- **Counted calls**: every new call shows on `/under-the-hood` under its API surface.
+  - SQL REST API: `note_extract`, `transcribe`, `store_note_extract`, `handoff_agg`, `handoff_sbar`, `store/read_handoff`, `analyst_exec`.
+  - Cortex Analyst REST: `cortex_analyst`.
+  - Connector: `forecast.train/predict/inputs/drop/store`, `notes.put_audio`, `analyst.put_semantic_model`.
+  - The inventory adds forecasts, note extractions and handoffs.
+- **Tests**:
+  - Backend **415** passed: Lee's new curve (crossing ~03:00, unchanged from 04:30), P_trend lead times, zones, MIN_GAP, COPD scale and callout; the replay forecast plan; extraction normalising and yes/no answers; the notes API (typed, voice, transcription failure, extraction fallback, pending); wording rewrites and rejection; handoff windows, rows, deterministic sections and validation; Analyst's read-only guard, chart choice, reply parsing and the YAML's verified questions; the forecast insights endpoint.
+  - Frontend **59** passed: recorder format, extract chips, Ask chart options, forecast overlay and freshness.
+  - `make lint` is clean.
+
+Verified against the real accounts (`make dev`, in-app browser):
+- **Cortex Analyst REST is enabled** on this trial account (unlike inference:complete). All 5 verified questions answer in ~2.5–3.5 s plus ~0.5 s of SQL, each through its verified query. Every table matches an independent query on Tiger:
+  - 16 residents with > 3 bed exits last night (night of 10-17).
+  - Memory Care night HR 61.4–62.1 over 7 nights.
+  - Least checked overnight: Thomas Grant 0 (live R-120, no sim checks), then 3 each.
+  - Alerts by unit/tier match (Tiger has one more East HIGH: the test note below, raised after the query).
+  - RR > 15 % rise: no rows; the largest rise in the last 24 h is 1 %.
+  - A free-form "How many bed exits per unit last night?" gave 81 / 79 / 62, matching the 222 total.
+- **Spoken note** "She seems more confused tonight and barely drank." (m4a, R-23 Betty Scott, live), 4.3 s in total:
+  - AI_TRANSCRIBE returned the exact sentence in 2.7 s; AI_EXTRACT gave confusion worse, intake reduced, concern med.
+  - **NEWS2 consciousness 0 → 3, score 9.7 STABLE → 60 HIGH**: a single 3-point parameter forces HIGH.
+  - The alert then triggered a live forecast (112 s on VIGIL_ML_WH) and the card "New confusion noted; check mental status and fluids".
+  - Chrome's webm/opus (re-encoded in the browser pane, R-50) also transcribed exactly, in 4.6 s.
+- **Handoff, night of 10-16** (AI_AGG, ~10 s) names Ortiz (suspected fall 04:06, found on the floor), Patel (CRITICAL unresponsive / RR ≤ 8, comfort care), Alvarez (new confusion, HIGH at end, urinalysis pending), Lee (RR 26, SpO₂ 89 %, provider call) and **Doris Wright: wristband not worn 01:10–04:58 (3 h 48 min)**.
+- **Replay**, read from the running replay engine (`POST /api/replay/start`, then each resident's card at the cursor):
+
+  | Time | Rosa Alvarez (17) | Henry Lee (42) |
+  |---|---|---|
+  | 23:12 | WATCH 44, #1 (first sustained deviation) | STABLE |
+  | 23:48 | WATCH 51, #2 | HIGH 60, #1 (SpO₂ 91 % dip; brief) |
+  | 00:42 | HIGH 61, #1 (brief, until 00:56) | WATCH |
+  | 01:12 | WATCH 48, **#1 from here to 02:26** | WATCH, #2 |
+  | 01:34 | HIGH 60, #1 | WATCH 42, #2 |
+  | 01:54 | HIGH 60, #1 | HIGH 60, #2 (briefly), forecast asked: no crossing |
+  | **02:14** | **HIGH 63, #1** ("Rising HR/RR and low SpO2 over past hours; check Rosa now") | **WATCH 53, #2** (RR 22, SpO₂ 93 %) |
+  | 02:17–02:20 | late 02:00 round reaches her → WATCH (check), confusion note 02:20 → 72 | |
+  | **02:28–02:32** | WATCH 73, #2 | **HIGH 60–66, #1**; the 02:28 forecast is known at **02:30: "RR forecast to cross 25 by ~04:15"** (P_trend 1) |
+  | 02:34 | HIGH 73, #1 again; CRITICAL 81 at 02:38 | HIGH 66, #2 |
+  | ~03:00 | CRITICAL 86–100, #1 | RR reaches 25 (25.3 in the 03:00 bucket), HIGH 72, #2 |
+  | 03:08–03:18 | WATCH 90–95 (checked), #2 | HIGH 72, #1 |
+  | 03:20 / 03:25 | WATCH 95, #1 | RN assessment, then the O2 / head-of-bed note: WATCH 69 |
+  | 03:52 | WATCH 95, #2 | HIGH 79, #1 (RR 26) |
+  | 04:38 | CRITICAL 94, #1 | WATCH 59, #3, improving after O2 |
+
+  The same pass gives 22 Vigil alerts for 4 residents (Patel CRITICAL from 04:02, Ortiz 04:06 / fall 04:08).
+- **Prepare**: the first run with forecasts took ~22 min (27 forecasts at ~1 per minute). After Lee's re-script it took 1,657 s, including detection, 24 forecasts on the 4 h window and **27 of 27 Cortex cards regenerated**, every headline in decision-support wording (e.g. "Rising HR/RR and low SpO2 over past hours; check Rosa now"). A run with everything cached takes ~5 min.
+- **Lee's re-script** (`scripts/reset_demo.py rescript --resident 42`):
+  - Regenerated his seeded history with the seed's RNG. The 6 h before the window matched Tiger exactly (4,320 rows).
+  - Replaced only his rows from noon before the night to the seed's end: 16,061 vitals rows, 26 events and 89 Snowflake VITALS_15M buckets.
+  - Then re-ran detection for the night. **No re-seed and no retraining**: the night is held out of training and baselines.
+  - Rows after 04:30 are unchanged, so the live loop's rows after the seed still fit.
+
+Known issues and assumptions:
+- **Lee's script moved later (SPEC §8, §4 updated).** With P_trend live, his old climb (RR 25 at 02:15) and its forecast held him above Alvarez at 02:14.
+  - Now his RR is gentle until 01:45, steps to ~22 by 02:15 and crosses 25 around 03:00. SpO₂ falls to 90 by ~03:15. The RN assessment moves to 03:20 and the O2 note to 03:25.
+  - Bookmarks: "Lee forecast warning" moved 01:30 → **02:30**; the 02:14 bookmark is now "Alvarez at #1" (she is #1 from 01:12, no longer "reaching" it).
+- **SPEC deviations**:
+  - Forecasts train on 4 h, not 48 h. RR exists only in bed, so 48 h is three separate nights, and the forecast stayed flat at 20.3 while Lee climbed. At 02:28, 6, 8 and 12 h windows all returned a flat forecast (21.8); only 4 h followed the climb. The cost is over-extrapolation late in a steep rise: Lee's 03:00 forecast projects RR ~31 within 2 h. `FORECAST_TRAIN_HOURS` changes it.
+  - Forecasts run 16 periods (4 h); the chart shows SPEC's 2 h, and the extra 2 h make P_trend's 0.5 reachable.
+  - `concern_level` is derived from the extracted findings (above).
+- **Forecast timing is coarse**: Lee's 02:30 forecast says 25 "by ~04:15", while it is reached at ~03:00. FORECAST extrapolates the 4-h trend from data ~30 min old (sync lag), and asks only happen on HIGH entries and every 30 min.
+- **Dev hot-reload stacks anomaly detection**: each backend reload starts a new `DETECT_ANOMALIES` run while the old process's queries keep running in Snowflake. During this build four runs overlapped on XSMALL and queued every interactive call. `ANOMALY_DETECT_ENABLED=false` was set in `.env` while building and has been removed. The running dev backend picks the restored setting up on its next restart or reload. A real fix (cancel server-side queries on shutdown) is not built.
+- **Test notes removed**: `reset_demo.py remove-notes --resident 23 50 --since 2026-10-18T19:55Z` removed both voice notes, their alerts, snapshots, extractions, forecast and card from Tiger and Snowflake, plus the audio files. Betty Scott is back to STABLE 12.5.
+- `reset_demo.py clear-forecasts` empties last night's forecast cache. I used it when switching to the 4 h window, so stale 12-h forecasts can't surface in replay.
+- Fixed: the last card of a prepare run lost its Snowflake copy (`CORE.AI_ASSESSMENTS`) because the script closed the HTTP client under the background write. Prepare now waits for those writes.
+- A live forecast lands ~1.5–2 min after the alert. The card made at the alert has no forecast; the next card includes it.
+
 **Phase 8 (replay mode + Under the hood): done**
 
 What works:

@@ -311,8 +311,9 @@ function SnowflakePanel() {
           </dl>
           <Note>
             In Snowflake now: {n(counts.anomaly_rows as number)} anomaly results · {n(counts.vitals_15m_rows as number)}{" "}
-            VITALS_15M rows · {n(counts.assessments as number)} AI assessments · {n(counts.care_plan_docs as number)} parsed
-            care plans · model <span className="font-mono">{s.model}</span>.
+            VITALS_15M rows · {n(counts.assessments as number)} AI assessments · {n(counts.forecasts as number)} forecasts ·{" "}
+            {n(counts.note_extracts as number)} note extractions · {n(counts.handoffs as number)} handoffs ·{" "}
+            {n(counts.care_plan_docs as number)} parsed care plans · model <span className="font-mono">{s.model}</span>.
             {inv?.ms !== undefined && ` Read via the SQL REST API in ${inv.ms} ms${inv.cached ? " (cached)" : ""}.`}
             {inv?.errors?.length ? ` Errors: ${inv.errors.join("; ")}` : ""}
           </Note>

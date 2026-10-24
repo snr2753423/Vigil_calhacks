@@ -4,6 +4,7 @@ Every call is counted with its latency under a feature name (`sync.vitals_15m`, 
 `/api/stats/snowflake` reads `call_stats`. `snowflake_rest.py` records its calls here too.
 """
 
+import contextlib
 import io
 import threading
 import time
@@ -96,7 +97,7 @@ class CallStats:
 call_stats = CallStats()
 
 
-def connect(settings: Settings | None = None) -> snowflake.connector.SnowflakeConnection:
+def connect(settings: Settings | None = None, warehouse: str | None = None) -> snowflake.connector.SnowflakeConnection:
     settings = settings or get_settings()
     if not settings.snowflake_configured:
         raise SnowflakeNotConfigured("SNOWFLAKE_ACCOUNT / SNOWFLAKE_USER are not set in .env")
@@ -110,13 +111,67 @@ def connect(settings: Settings | None = None) -> snowflake.connector.SnowflakeCo
             authenticator="SNOWFLAKE_JWT",
             private_key_file=str(key_file),
             role=settings.snowflake_role,
-            warehouse=settings.snowflake_warehouse,
+            warehouse=warehouse or settings.snowflake_warehouse,
             database=settings.snowflake_database,
             login_timeout=LOGIN_TIMEOUT_S,
             application="vigil",
             # Explicit to silence the connector's FutureWarning; we run no async queries, so always log out on close.
             enable_server_session_keep_alive_auto_detection=False,
         )
+
+
+class SharedConnection:
+    """One lazily opened connector connection for a background feature (live forecasts, voice-note PUTs). The
+    connector allows concurrent cursors on one connection. A failed call drops the connection and is retried once
+    on a fresh login (an idle session expires after a few hours)."""
+
+    def __init__(self, warehouse: str | None = None) -> None:
+        self._lock = threading.Lock()
+        self._conn: snowflake.connector.SnowflakeConnection | None = None
+        self.warehouse = warehouse  # None: SNOWFLAKE_WAREHOUSE
+
+    def get(self) -> snowflake.connector.SnowflakeConnection:
+        with self._lock:
+            if self._conn is None or self._conn.is_closed():
+                self._conn = connect(warehouse=self.warehouse)
+            return self._conn
+
+    def reset(self) -> None:
+        with self._lock:
+            conn, self._conn = self._conn, None
+        if conn is not None:
+            with contextlib.suppress(Exception):  # already broken; just drop it
+                conn.close()
+
+    def run(self, fn):
+        """fn(conn) on the shared connection; on a lost or expired session, once more on a new login. Other errors
+        (bad SQL, a missing stage, privileges) are raised at once: a new login would fail the same way."""
+        try:
+            return fn(self.get())
+        except snowflake.connector.errors.Error as exc:
+            if not session_lost(exc):
+                raise
+            self.reset()
+            return fn(self.get())
+
+
+SESSION_EXPIRED_ERRNOS = {390111, 390112, 390114}  # session no longer exists / master token / auth token expired
+
+
+def session_lost(exc: Exception) -> bool:
+    """A connector error a fresh login fixes: the connection dropped or the session or token expired."""
+    if isinstance(exc, snowflake.connector.errors.ProgrammingError):
+        return getattr(exc, "errno", None) in SESSION_EXPIRED_ERRNOS
+    return isinstance(exc, snowflake.connector.errors.OperationalError | snowflake.connector.errors.InterfaceError)
+
+
+shared = SharedConnection()  # voice-note PUTs
+
+
+def ml_warehouse() -> str | None:
+    """The warehouse for heavy ML (FORECAST training, `make train`): SNOWFLAKE_TRAIN_WAREHOUSE if set, so it never
+    queues the interactive Cortex calls (notes, cards, handoff, Ask) on the XSMALL SNOWFLAKE_WAREHOUSE."""
+    return get_settings().snowflake_train_warehouse or None
 
 
 def query(

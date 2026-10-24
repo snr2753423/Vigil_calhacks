@@ -30,6 +30,7 @@ async def status() -> dict:
 class PrepareBody(BaseModel):
     force_detect: bool = False  # re-run ANOMALY_DETECTION even if the night already has results
     force_cards: bool = False  # regenerate cached Cortex cards
+    force_deep: bool = False  # redo cached note extractions and forecasts
 
 
 @router.post("/prepare", status_code=202)
@@ -37,7 +38,7 @@ async def start_prepare(body: PrepareBody | None = None) -> dict:
     """Start precomputing last night's deep-tier results in the background (several minutes); poll GET /api/replay."""
     body = body or PrepareBody()
     try:
-        prepare.launch(force_detect=body.force_detect, force_assess=body.force_cards)
+        prepare.launch(force_detect=body.force_detect, force_assess=body.force_cards, force_deep=body.force_deep)
     except prepare.PrepareError as exc:
         raise _fail(exc) from exc
     return {"prepare": prepare.progress.to_dict() | {"running": True}}

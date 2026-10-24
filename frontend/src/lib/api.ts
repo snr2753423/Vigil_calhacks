@@ -37,3 +37,7 @@ export async function postJSON<T>(path: string, body?: unknown): Promise<T> {
     }),
   );
 }
+
+export async function postForm<T>(path: string, form: FormData, signal?: AbortSignal): Promise<T> {
+  return handle<T>(await fetch(path, { method: "POST", body: form, signal }));
+}

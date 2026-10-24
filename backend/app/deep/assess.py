@@ -45,15 +45,18 @@ from app.db import tiger
 from app.db.snowflake_rest import client as rest_client
 from app.deep.anomaly import REVEAL_DELAY
 from app.deep.sync import BUCKET, naive_utc
+from app.deep.wording import soften, violations
 from app.scoring import evaluator as ev
 from app.scoring.baseline import BLOCK_NAMES, VITAL_METRICS, Baselines, tod_block
 from app.scoring.priority import TIER_RANK
+from app.scoring.trend import annotate as annotate_forecast
 from app.sim.care_plans import MOBILITY_TEXT
 from app.ws.hub import hub
 
 log = logging.getLogger(__name__)
 
 TEMPLATE_MODEL = "deterministic template"
+FORECAST_FRESH = timedelta(minutes=tiger.FORECAST_LOOKBACK_MIN)  # the forecast P_trend still uses
 
 # Bedside checks suggested by each factor key (rule:* keys use the part after the colon).
 CHECKS: dict[str, str] = {
@@ -178,7 +181,7 @@ CONCURRENCY = 2
 EVENTS_LOOKBACK = timedelta(hours=12)
 TREND_HOURS = 8
 CARE_PLAN_CHUNKS = 4
-MAX_TOKENS = 1500
+MAX_TOKENS = 3000  # the model's reasoning counts too: at 1500 some cards were cut off mid-JSON
 SKIP_EVENTS = ("alert_raised", "alert_acknowledged", "alert_resolved")  # Vigil's own output, not evidence
 METRIC_NAME = {"hr": "Heart rate (bpm)", "rr": "Respiratory rate (/min)", "spo2": "SpO2 (%)",
                "skin_temp": "Wrist skin temp (°C)", "motion": "Movement (counts per 15 min, in bed at night)"}  # fmt: skip
@@ -215,8 +218,11 @@ Rules:
 1. Use ONLY the facts in the CONTEXT. Never invent vital signs, symptoms, notes, findings or history. If \
 something was not documented (for example confusion, fever, pain or a fall), do not say it is present; you \
 may recommend checking for it.
-2. No diagnosis. Say "possible", "could fit", "consider". Name possible concerns (e.g. "possible early \
-infection or delirium") only when the data and care plan support them, and say what supports each one.
+2. No diagnosis. Say "possible", "could fit", "consider", "check for". Name possible concerns (e.g. "possible \
+early infection or delirium") only when the data and care plan support them, and say what supports each one. \
+Never write "likely", "probably", "diagnosis", "diagnose", "confirms" or "indicates", and never state a condition \
+as present ("has sepsis", "infection likely", "UTI"): write "possible infection", "could fit early infection", \
+"check for urinary symptoms". This applies to the headline too.
 3. Cite the data behind each claim with numbers from the CONTEXT, e.g. "HR 84 vs her expected 67-79", \
 "movement 3x her usual", "drank half her fluids (note 21:30)".
 4. Recommend concrete bedside checks staff can do now (mental status vs baseline, temperature, fluids and \
@@ -354,7 +360,10 @@ async def build_context(
     timeline = [line for e in events if (line := describe_event(e, tz))]
     fluids = sum(float((e.get("payload") or {}).get("fluid_ml") or 0) for e in events if e["type"] == "intake_logged")
 
-    forecast = await tiger.insights_range(conn, rid, "forecast", at - timedelta(hours=2), at)
+    # the newest Snowflake FORECAST still driving P_trend, its crossings under the current rules
+    copd = "copd" in (resident.get("flags") or ())
+    forecast = [annotate_forecast(r["payload"], tz, copd)
+                for r in await tiger.insights_range(conn, rid, "forecast", at - FORECAST_FRESH, at)]  # fmt: skip
 
     cur = current or {}
     comps = cur.get("components") or {}
@@ -392,8 +401,9 @@ async def build_context(
         "hourly_trend": hourly,
         "events": timeline,
         "fluids_ml_12h": round(fluids),
-        "forecast": [r["payload"] for r in forecast][-1:] or None,
+        "forecast": forecast[-1:] or None,
         "care_plan": [],
+        "tz": tz,
     }  # fmt: skip
 
 
@@ -479,7 +489,7 @@ def render_context(ctx: dict) -> str:
     lines.append("EVENTS AND NOTES, last 12 h (oldest first)")
     lines += [f"- {e}" for e in ctx["events"]] or ["- none"]
     lines += [f"Fluid intake logged in the last 12 h: {ctx['fluids_ml_12h']} mL.", ""]
-    lines.append(f"FORECAST: {json.dumps(ctx['forecast'][-1]) if ctx['forecast'] else 'not available'}.")
+    lines += forecast_lines(ctx["forecast"][-1] if ctx["forecast"] else None, ctx.get("tz"))
     lines += ["", "CARE PLAN EXCERPTS (Cortex Search, this resident only)"]
     if ctx["care_plan"]:
         for c in ctx["care_plan"]:
@@ -490,6 +500,31 @@ def render_context(ctx: dict) -> str:
     else:
         lines.append("(care plan not available right now)")
     return "\n".join(lines)
+
+
+def forecast_lines(fc: dict | None, tz: ZoneInfo | None) -> list[str]:
+    """The newest Snowflake FORECAST as prompt lines: each metric's last value, the 2-h forecast with its 90 %
+    interval, and the first NEWS2 3-point crossing within 4 h."""
+    if not fc:
+        return ["SNOWFLAKE FORECAST: not available."]
+    tz = tz or UTC
+    lines = [f"SNOWFLAKE FORECAST (ML.FORECAST, made {_hhmm(fc['as_of'], tz)} from the last {fc.get('train_hours', 12):g} h "
+             "of 15-min buckets; 90% interval)"]  # fmt: skip
+    for m, d in (fc.get("metrics") or {}).items():
+        pts = (d.get("points") or [])[: fc.get("chart_periods", 8)]
+        if not pts:
+            continue
+        end = pts[-1]
+        cross = d.get("crossing")
+        when = (
+            f"; forecast to reach the NEWS2 3-point zone ({'≥' if cross['direction'] == 'up' else '≤'}"
+            f"{cross['threshold']:g}) by ~{_hhmm(cross['crosses_at'], tz)}"
+            if cross
+            else "; no NEWS2 3-point crossing"
+        )
+        lines.append(f"- {METRIC_NAME.get(m, m)}: last {_num(d.get('last_value'))}, in 2 h {_num(end[1])} "
+                     f"(range {_num(end[2])}-{_num(end[3])}){when}")  # fmt: skip
+    return lines
 
 
 def messages_for(ctx: dict) -> list[dict[str, str]]:
@@ -531,8 +566,8 @@ def validate(obj: dict, chunks: Iterable[dict]) -> dict:
     missing = [k for k in ASSESSMENT_SCHEMA["required"] if k not in obj]
     if missing:
         raise InvalidAssessment(f"missing {missing}")
-    headline, assessment = _str(obj["headline"], 140), _str(obj["assessment"], 900)
-    checks = _list(obj["recommended_checks"], 6, 200)
+    headline, assessment = soften(_str(obj["headline"], 140)), soften(_str(obj["assessment"], 900))
+    checks = [soften(c, hedge=False) for c in _list(obj["recommended_checks"], 6, 200)]
     if not headline or not assessment or not checks:
         raise InvalidAssessment("empty headline, assessment or recommended_checks")
     corpus = [(c.get("section") or "", _norm(c.get("chunk") or "")) for c in chunks]
@@ -551,16 +586,29 @@ def validate(obj: dict, chunks: Iterable[dict]) -> dict:
         seen.add(q)
         citations.append({"section": _str(c.get("section"), 80) or src, "quote": quote})
     confidence = obj.get("confidence") if obj.get("confidence") in ("low", "medium", "high") else "medium"
-    return {
+    card = {
         "headline": headline,
         "assessment": assessment,
-        "possible_concerns": _list(obj["possible_concerns"], 5, 160),
+        "possible_concerns": [soften(c) for c in _list(obj["possible_concerns"], 5, 160)],
         "recommended_checks": checks,
-        "escalation": _str(obj["escalation"], 400),
+        "escalation": soften(_str(obj["escalation"], 400), hedge=False),
         "care_plan_citations": citations[:4],
         "confidence": confidence,
-        "caveats": _str(obj["caveats"], 300),
+        "caveats": soften(_str(obj["caveats"], 300), hedge=False),
     }
+    # Decision-support wording (AGENTS.md rule 9): anything `soften` could not rewrite rejects the card.
+    texts = [card["headline"], card["assessment"], card["escalation"], card["caveats"], *card["possible_concerns"],
+             *card["recommended_checks"]]  # fmt: skip
+    if bad := sorted({v for t in texts for v in violations(t)}):
+        raise InvalidAssessment(f"firm diagnostic wording ({', '.join(bad)})")
+    return card
+
+
+def wording_rewrites(raw: dict, card: dict) -> int:
+    """How many of the model's texts `validate` had to rewrite into decision-support wording."""
+    before = [_str(raw.get(k), 900) for k in ("headline", "assessment", "escalation", "caveats")]
+    after = [card[k] for k in ("headline", "assessment", "escalation", "caveats")]
+    return sum(1 for a, b in zip(before, after, strict=True) if a != b)
 
 
 # --------------------------------------------------------------------------- the assessor
@@ -576,6 +624,7 @@ class AssessStats:
     errors: int = 0
     invalid: int = 0
     citations_dropped: int = 0
+    wording_rewrites: int = 0  # texts rewritten into decision-support wording (`wording.soften`)
     last_ms: float | None = None
     avg_ms: float | None = None
     last_trigger: str | None = None
@@ -723,6 +772,7 @@ class Assessor:
             self.stats.invalid += 1
             raise InvalidAssessment(f"Cortex output rejected: {exc}") from exc
         self.stats.citations_dropped += len(raw.get("care_plan_citations") or []) - len(card["care_plan_citations"])
+        self.stats.wording_rewrites += wording_rewrites(raw, card)
         elapsed = (time.perf_counter() - t0) * 1000
         payload = card | {
             "source": "cortex",
@@ -772,7 +822,13 @@ class Assessor:
                 timeout=20,
             )  # fmt: skip
         except Exception as exc:
-            log.warning("assess: storing R-%d in CORE.AI_ASSESSMENTS failed: %s", rid, " ".join(str(exc).split())[:160])
+            why = " ".join(str(exc).split())[:160] or type(exc).__name__
+            log.warning("assess: storing R-%d in CORE.AI_ASSESSMENTS failed: %s", rid, why)
+
+    async def drain(self) -> None:
+        """Wait for the fire-and-forget CORE.AI_ASSESSMENTS writes (a script must not close the client under them)."""
+        if self._background:
+            await asyncio.gather(*list(self._background), return_exceptions=True)
 
     def _record(self, rid: int, trigger: str, elapsed_ms: float) -> None:
         s = self.stats

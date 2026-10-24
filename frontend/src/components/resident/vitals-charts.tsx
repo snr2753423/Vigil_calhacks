@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
+import { Loader2, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "cn";
 
@@ -11,6 +11,8 @@ import {
   BAND,
   bandedLineOption,
   EXPECTED,
+  FORECAST,
+  FORECAST_BAND,
   deltaOption,
   inBedOption,
   LINE,
@@ -18,9 +20,10 @@ import {
   spo2Option,
   ZONE,
 } from "@/lib/chart-options";
-import type { AnomalyBucket, AnomalyResponse, VitalBaselines, VitalsResponse } from "@/lib/types";
+import type { AnomalyBucket, AnomalyResponse, Forecast, ForecastResponse, VitalBaselines, VitalsResponse } from "@/lib/types";
 import { useReplayCursor } from "@/hooks/use-clock";
 import { useNow } from "@/hooks/use-now";
+import { facilityHHMM } from "@/lib/format";
 import { useLiveStore } from "@/store/live";
 import {
   anomalyPoints,
@@ -29,7 +32,9 @@ import {
   baselineBand,
   deltaVsBaseline,
   expectedBand,
+  forecastOverlay,
   hasData,
+  latestForecast,
   RANGES,
   type RangeKey,
 } from "@/lib/vitals";
@@ -50,6 +55,9 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
   const polar = useLiveStore((s) => s.devices[`${residentId}:polar`]);
   const now = useNow();
   const [anomalies, setAnomalies] = useState<AnomalyBucket[]>([]);
+  const [forecasts, setForecasts] = useState<Forecast[]>([]);
+  const lastInsight = useLiveStore((s) => s.lastInsight);
+  const forecastTick = lastInsight?.kind === "forecast" && lastInsight.resident_id === residentId ? lastInsight.as_of : null;
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -75,6 +83,12 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
       const overlay = getJSON<AnomalyResponse>(`/api/insights/${residentId}?${aq}`, ctrl.signal)
         .then((r) => r.items)
         .catch(() => null);
+      // Snowflake FORECAST runs known by the chart's end (made on HIGH/CRITICAL, refreshed every 30 min).
+      const fq = new URLSearchParams({ kind: "forecast", from: new Date((replayEnd ?? Date.now()) - 2 * 3600_000).toISOString() });
+      if (replayEnd !== null) fq.set("to", new Date(Math.min(replayEnd, cursor ?? replayEnd)).toISOString());
+      const fcs = getJSON<ForecastResponse>(`/api/insights/${residentId}?${fq}`, ctrl.signal)
+        .then((r) => r.items)
+        .catch(() => null);
       try {
         const asked = Date.now();
         setData(await getJSON<VitalsResponse>(`/api/residents/${residentId}/vitals?${q}`, ctrl.signal));
@@ -87,6 +101,8 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
       }
       const items = await overlay;
       if (!ctrl.signal.aborted && items) setAnomalies(items);
+      const f = await fcs;
+      if (!ctrl.signal.aborted && f) setForecasts(f);
     };
     void load();
     const t = replayEnd === null ? setInterval(load, r.refreshMs) : undefined;
@@ -96,7 +112,7 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
     };
     // `cursor` is read only for the replay's `to`; `replayEnd` (its rounded value) drives reloads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [residentId, range, replayEnd]);
+  }, [residentId, range, replayEnd, forecastTick]);
 
   const charts = useMemo(() => {
     if (!data || data.ts.length < 2) return null;
@@ -117,30 +133,39 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
     const dots = (m: "hr" | "rr" | "spo2" | "skin_temp" | "motion", v: (number | null)[] | undefined) =>
       v && a.length ? anomalyPoints(ts, v, a, m) : [];
     const flagged = a.filter((b) => b.anomalous.length > 0).length;
+    // Snowflake FORECAST: the newest fresh one, drawn past the last reading on HR / RR / SpO₂ (not on 7 d).
+    const endMs = replayEnd !== null ? Math.min(replayEnd, cursor ?? replayEnd) : fetchedAt; // live: the last fetch
+    const fc = range === "7d" ? null : latestForecast(forecasts, endMs);
+    const fo = (m: "hr" | "rr" | "spo2") => (fc ? (forecastOverlay(fc, m) ?? undefined) : undefined);
+    const fHr = fo("hr");
+    const fRr = fo("rr");
+    const fSpo2 = fo("spo2");
+    const xMax = Math.max(0, ...[fHr, fRr, fSpo2].map((f) => (f ? f.ts[f.ts.length - 1] : 0)));
     // A live device (the presenter's Polar band) adds its 1-s readings after the last fetch.
     const hr = longRange || !s.hr || replayEnd !== null ? { ts, values: s.hr ?? [] } : appendLive(ts, s.hr, liveHr, fetchedAt);
     const hrBand = baselineBand(hr.ts, baselines, "hr");
     const hrExp = a.length ? expectedBand(hr.ts, step, a, "hr") : undefined;
     return {
       hr: hasData(hr.values)
-        ? bandedLineOption({ ts: hr.ts, values: hr.values, band: hrBand, name: "Heart rate", unit: " bpm", digits: 0, longRange, height: 200, expected: hrExp, anomalies: dots("hr", s.hr) })
+        ? bandedLineOption({ ts: hr.ts, values: hr.values, band: hrBand, name: "Heart rate", unit: " bpm", digits: 0, longRange, height: 200, expected: hrExp, anomalies: dots("hr", s.hr), forecast: fHr, xMax })
         : null,
       rr: hasData(s.rr)
-        ? bandedLineOption({ ts, values: s.rr!, band: rrBand, name: "Resp. rate", unit: "/min", digits: 1, longRange, height: 150, expected: exp("rr"), anomalies: dots("rr", s.rr) })
+        ? bandedLineOption({ ts, values: s.rr!, band: rrBand, name: "Resp. rate", unit: "/min", digits: 1, longRange, height: 150, expected: exp("rr"), anomalies: dots("rr", s.rr), forecast: fRr, xMax })
         : null,
       spo2: hasData(s.spo2)
-        ? spo2Option({ ts, values: s.spo2!, scale: copd ? 2 : 1, longRange, height: 150, expected: exp("spo2"), anomalies: dots("spo2", s.spo2) })
+        ? spo2Option({ ts, values: s.spo2!, scale: copd ? 2 : 1, longRange, height: 150, expected: exp("spo2"), anomalies: dots("spo2", s.spo2), forecast: fSpo2, xMax })
         : null,
       skin: hasData(skinDelta)
-        ? deltaOption({ ts, values: skinDelta, longRange, height: 130, expected: skinExp, anomalies: dots("skin_temp", skinDelta) })
+        ? deltaOption({ ts, values: skinDelta, longRange, height: 130, expected: skinExp, anomalies: dots("skin_temp", skinDelta), xMax })
         : null,
       motion: hasData(s.motion)
-        ? motionOption({ ts, values: s.motion!, longRange, height: 110, anomalies: dots("motion", s.motion) })
+        ? motionOption({ ts, values: s.motion!, longRange, height: 110, anomalies: dots("motion", s.motion), xMax })
         : null,
-      bed: hasData(s.in_bed) ? inBedOption({ ts, values: s.in_bed!, longRange, height: 70 }) : null,
+      bed: hasData(s.in_bed) ? inBedOption({ ts, values: s.in_bed!, longRange, height: 70, xMax }) : null,
       snowflake: { buckets: a.length, flagged, stepMin: Math.round(step / 60_000), bucketMin: BUCKET_MS / 60_000 },
+      forecast: fc ? { fc, hr: !!fHr, rr: !!fRr, spo2: !!fSpo2 } : null,
     };
-  }, [data, anomalies, baselines, copd, range, liveHr, fetchedAt, replayEnd]);
+  }, [data, anomalies, forecasts, baselines, copd, range, liveHr, fetchedAt, replayEnd, cursor]);
 
   const group = `resident-${residentId}`;
   const usual = <LegendSwatch color={BAND} label={`${pronoun} usual range (p05–p95)`} band />;
@@ -150,6 +175,8 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
       <AnomalySwatch />
     </>
   ) : null;
+  const fcLegend = <ForecastSwatch />;
+  const fc = charts?.forecast ?? null;
 
   return (
     <section aria-labelledby="vitals-heading" className="space-y-4 rounded-2xl bg-card p-4 ring-1 ring-white/10">
@@ -179,6 +206,7 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
           {error}
         </p>
       )}
+      {fc && <ForecastCallout fc={fc.fc} />}
       {!charts ? (
         <div className="flex h-64 items-center justify-center text-muted-foreground">
           {loading ? "Loading charts…" : "No readings in this range"}
@@ -202,6 +230,7 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
                 <LegendSwatch color={LINE} label="Heart rate" />
                 {usual}
                 {sf}
+                {fc?.hr && fcLegend}
               </span>
             }
           />
@@ -216,6 +245,7 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
                 <span className="flex flex-wrap gap-3">
                   {usual}
                   {sf}
+                  {fc?.rr && fcLegend}
                 </span>
               ) : undefined
             }
@@ -232,6 +262,7 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
                 <LegendSwatch color={ZONE[1]} label="+1" band />
                 <LegendSwatch color={ZONE[2]} label="+2" band />
                 <LegendSwatch color={ZONE[3]} label="+3" band />
+                {fc?.spo2 && fcLegend}
               </span>
             }
           />
@@ -261,6 +292,37 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
         </div>
       )}
     </section>
+  );
+}
+
+function ForecastSwatch() {
+  return (
+    <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+      <svg width="22" height="10" aria-hidden className="shrink-0">
+        <rect x="0" y="1" width="22" height="8" rx="2" fill={FORECAST_BAND} />
+        <line x1="1" y1="5" x2="21" y2="5" stroke={FORECAST} strokeWidth="2" strokeDasharray="4 3" />
+      </svg>
+      Snowflake forecast (90 %)
+    </span>
+  );
+}
+
+/** "RR forecast to cross 25 by ~03:00" from the newest Snowflake FORECAST, with when it was made. */
+function ForecastCallout({ fc }: { fc: Forecast }) {
+  return (
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-3 py-2 text-base ring-1",
+        fc.callout ? "bg-amber-500/12 text-amber-50 ring-amber-400/40" : "bg-white/5 text-muted-foreground ring-white/10",
+      )}
+      role="status"
+    >
+      <TrendingUp className="size-5 shrink-0 text-amber-300" aria-hidden />
+      <span className="font-semibold">{fc.callout ?? "Forecast: no NEWS2 3-point threshold crossed within 4 h"}</span>
+      <span className="text-sm text-muted-foreground">
+        Snowflake ML.FORECAST · made {facilityHHMM(Date.parse(fc.as_of))} from the last {fc.train_hours} h · dashed line = next 2 h
+      </span>
+    </div>
   );
 }
 

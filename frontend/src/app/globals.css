@@ -151,3 +151,29 @@
     outline-offset: 1px;
   }
 }
+
+/* Printing (the shift handoff): light paper colours, no app chrome. Elements marked .print-hide are left out. */
+@media print {
+  .dark {
+    --background: #fff;
+    --foreground: #000;
+    --card: #fff;
+    --card-foreground: #000;
+    --muted-foreground: #333;
+    --border: #bbb;
+  }
+  body > header,
+  .print-hide {
+    display: none !important;
+  }
+  .print-sheet,
+  .print-sheet * {
+    color: #000 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+  .print-sheet section {
+    break-inside: avoid;
+    border: 1px solid #bbb;
+  }
+}

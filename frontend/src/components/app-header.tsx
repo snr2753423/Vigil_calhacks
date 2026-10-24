@@ -14,6 +14,8 @@ import { ROLES, type Role, usePrefs } from "@/store/prefs";
 
 const NAV = [
   { href: "/", label: "Rounds" },
+  { href: "/handoff", label: "Handoff" },
+  { href: "/ask", label: "Ask" },
   { href: "/devices", label: "Devices" },
   { href: "/under-the-hood", label: "Under the hood" },
   { href: "/admin", label: "Admin" },

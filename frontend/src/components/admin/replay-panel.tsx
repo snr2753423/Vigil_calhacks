@@ -17,10 +17,11 @@ type Msg = { ok: boolean; text: string } | null;
 
 const PHASES: Record<PrepareProgress["phase"], string> = {
   idle: "Idle",
-  detecting: "1/4 Snowflake anomaly detection",
-  scoring: "2/4 Scoring the night through the live pipeline",
-  forecasting: "3/4 Forecast hook",
-  assessing: "4/4 Snowflake Cortex AI cards",
+  detecting: "1/5 Snowflake anomaly detection",
+  notes: "2/5 Snowflake AI_EXTRACT on the night's notes",
+  scoring: "3/5 Scoring the night through the live pipeline",
+  forecasting: "4/5 Snowflake FORECAST where live would ask",
+  assessing: "5/5 Snowflake Cortex AI cards",
   done: "Done",
   error: "Failed",
 };
@@ -33,6 +34,7 @@ export function ReplayPanel() {
   const [speed, setSpeed] = useState<number>(60);
   const [forceDetect, setForceDetect] = useState(false);
   const [forceCards, setForceCards] = useState(false);
+  const [forceDeep, setForceDeep] = useState(false);
   const { now } = useClock();
   const report = (r: { ok: boolean; text: string }) => {
     setMsg(r);
@@ -45,8 +47,8 @@ export function ReplayPanel() {
 
   const startPrepare = async () => {
     try {
-      await postJSON("/api/replay/prepare", { force_detect: forceDetect, force_cards: forceCards });
-      report({ ok: true, text: "Prepare replay started: this takes a few minutes (detection, scoring, AI cards)." });
+      await postJSON("/api/replay/prepare", { force_detect: forceDetect, force_cards: forceCards, force_deep: forceDeep });
+      report({ ok: true, text: "Prepare replay started: this takes several minutes (detection, notes, scoring, forecasts, AI cards)." });
     } catch (e) {
       report({ ok: false, text: `Prepare failed to start: ${e instanceof Error ? e.message : e}` });
     }
@@ -71,7 +73,8 @@ export function ReplayPanel() {
             <h3 className="text-lg font-semibold">1 · Prepare</h3>
             <p className="text-base text-muted-foreground">
               Precomputes everything the replay reveals, so it never waits on Snowflake: anomaly detection over the
-              night, the gated scoring pass, and Snowflake Cortex cards at each bookmark and escalation.
+              night, AI_EXTRACT on its nurse notes, the gated scoring pass, forecasts where live would ask for them,
+              and Snowflake Cortex cards at each bookmark and escalation.
             </p>
             {prepared ? (
               <PreparedSummary status={status} />
@@ -95,6 +98,10 @@ export function ReplayPanel() {
               <label className="flex items-center gap-2 text-sm text-muted-foreground">
                 <input type="checkbox" checked={forceCards} onChange={(e) => setForceCards(e.target.checked)} className="size-5" />
                 regenerate AI cards
+              </label>
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                <input type="checkbox" checked={forceDeep} onChange={(e) => setForceDeep(e.target.checked)} className="size-5" />
+                redo forecasts and note extraction
               </label>
             </div>
           </div>
@@ -191,7 +198,10 @@ function PreparedSummary({ status }: { status: ReplayStatus }) {
       </dl>
       <p className="text-sm text-muted-foreground">
         {d.ran ? `ANOMALY_DETECTION ran in ${Math.round(d.seconds ?? 0)} s. ` : `${d.reason}. `}
-        Forecasts: {p.forecasts.status}. {status.cards} Cortex cards on the night are cached in Tiger.
+        Forecasts: {p.forecasts.requested} asked for, {p.forecasts.stored + (p.forecasts.cached ?? 0)} made
+        {p.forecasts.failed ? ` (${p.forecasts.failed} without enough data)` : ""}.
+        {p.notes ? ` Notes: ${p.notes.extracted + p.notes.cached} of ${p.notes.notes} read by AI_EXTRACT.` : ""}{" "}
+        {status.cards} Cortex cards on the night are cached in Tiger.
       </p>
     </div>
   );
