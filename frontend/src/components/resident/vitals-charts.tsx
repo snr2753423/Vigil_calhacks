@@ -7,8 +7,10 @@ import { cn } from "cn";
 import { ChartPanel, LegendSwatch } from "@/components/resident/chart-panel";
 import { getJSON } from "@/lib/api";
 import {
+  ANOMALY,
   BAND,
   bandedLineOption,
+  EXPECTED,
   deltaOption,
   inBedOption,
   LINE,
@@ -16,8 +18,17 @@ import {
   spo2Option,
   ZONE,
 } from "@/lib/chart-options";
-import type { VitalBaselines, VitalsResponse } from "@/lib/types";
-import { baselineBand, deltaVsBaseline, hasData, RANGES, type RangeKey } from "@/lib/vitals";
+import type { AnomalyBucket, AnomalyResponse, VitalBaselines, VitalsResponse } from "@/lib/types";
+import {
+  anomalyPoints,
+  BUCKET_MS,
+  baselineBand,
+  deltaVsBaseline,
+  expectedBand,
+  hasData,
+  RANGES,
+  type RangeKey,
+} from "@/lib/vitals";
 
 const METRICS = "hr,rr,spo2,skin_temp,motion,in_bed";
 
@@ -28,6 +39,7 @@ type Props = { residentId: number; baselines: VitalBaselines; copd: boolean; pro
 export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
   const [range, setRange] = useState<RangeKey>("6h");
   const [data, setData] = useState<VitalsResponse | null>(null);
+  const [anomalies, setAnomalies] = useState<AnomalyBucket[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -39,6 +51,11 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
       // No `to`: the backend uses its own now, so a fast device clock can't send a "future" timestamp.
       const from = new Date(Date.now() - r.ms);
       const q = new URLSearchParams({ metrics: METRICS, from: from.toISOString(), res: r.res });
+      // Snowflake overlay (cached in Tiger): optional — the charts never wait on it or fail because of it.
+      const aq = new URLSearchParams({ kind: "anomaly", from: from.toISOString() });
+      const overlay = getJSON<AnomalyResponse>(`/api/insights/${residentId}?${aq}`, ctrl.signal)
+        .then((r) => r.items)
+        .catch(() => null);
       try {
         setData(await getJSON<VitalsResponse>(`/api/residents/${residentId}/vitals?${q}`, ctrl.signal));
         setError(null);
@@ -47,6 +64,8 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
       } finally {
         if (!ctrl.signal.aborted) setLoading(false);
       }
+      const items = await overlay;
+      if (!ctrl.signal.aborted && items) setAnomalies(items);
     };
     void load();
     const t = setInterval(load, r.refreshMs);
@@ -64,22 +83,47 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
     const hrBand = baselineBand(ts, baselines, "hr");
     const rrBand = baselineBand(ts, baselines, "rr");
     const skinDelta = s.skin_temp ? deltaVsBaseline(ts, s.skin_temp, baselines, "skin_temp") : [];
+    // Snowflake overlays: the model's expected range (99 % interval) and the buckets it flagged.
+    const step = ts[1] - ts[0];
+    const a = anomalies;
+    const exp = (m: "hr" | "rr" | "spo2" | "skin_temp") => (a.length ? expectedBand(ts, step, a, m) : undefined);
+    const skinExp = exp("skin_temp");
+    if (skinExp) {
+      const p50 = baselineBand(ts, baselines, "skin_temp").p50; // shown as change vs usual, like the line
+      skinExp.lower = skinExp.lower.map((v, i) => (v === null || p50[i] === null ? null : v - (p50[i] as number)));
+    }
+    const dots = (m: "hr" | "rr" | "spo2" | "skin_temp" | "motion", v: (number | null)[] | undefined) =>
+      v && a.length ? anomalyPoints(ts, v, a, m) : [];
+    const flagged = a.filter((b) => b.anomalous.length > 0).length;
     return {
       hr: hasData(s.hr)
-        ? bandedLineOption({ ts, values: s.hr!, band: hrBand, name: "Heart rate", unit: " bpm", digits: 0, longRange, height: 200 })
+        ? bandedLineOption({ ts, values: s.hr!, band: hrBand, name: "Heart rate", unit: " bpm", digits: 0, longRange, height: 200, expected: exp("hr"), anomalies: dots("hr", s.hr) })
         : null,
       rr: hasData(s.rr)
-        ? bandedLineOption({ ts, values: s.rr!, band: rrBand, name: "Resp. rate", unit: "/min", digits: 1, longRange, height: 150 })
+        ? bandedLineOption({ ts, values: s.rr!, band: rrBand, name: "Resp. rate", unit: "/min", digits: 1, longRange, height: 150, expected: exp("rr"), anomalies: dots("rr", s.rr) })
         : null,
-      spo2: hasData(s.spo2) ? spo2Option({ ts, values: s.spo2!, scale: copd ? 2 : 1, longRange, height: 150 }) : null,
-      skin: hasData(skinDelta) ? deltaOption({ ts, values: skinDelta, longRange, height: 130 }) : null,
-      motion: hasData(s.motion) ? motionOption({ ts, values: s.motion!, longRange, height: 110 }) : null,
+      spo2: hasData(s.spo2)
+        ? spo2Option({ ts, values: s.spo2!, scale: copd ? 2 : 1, longRange, height: 150, expected: exp("spo2"), anomalies: dots("spo2", s.spo2) })
+        : null,
+      skin: hasData(skinDelta)
+        ? deltaOption({ ts, values: skinDelta, longRange, height: 130, expected: skinExp, anomalies: dots("skin_temp", skinDelta) })
+        : null,
+      motion: hasData(s.motion)
+        ? motionOption({ ts, values: s.motion!, longRange, height: 110, anomalies: dots("motion", s.motion) })
+        : null,
       bed: hasData(s.in_bed) ? inBedOption({ ts, values: s.in_bed!, longRange, height: 70 }) : null,
+      snowflake: { buckets: a.length, flagged, stepMin: Math.round(step / 60_000), bucketMin: BUCKET_MS / 60_000 },
     };
-  }, [data, baselines, copd, range]);
+  }, [data, anomalies, baselines, copd, range]);
 
   const group = `resident-${residentId}`;
   const usual = <LegendSwatch color={BAND} label={`${pronoun} usual range (p05–p95)`} band />;
+  const sf = charts?.snowflake.buckets ? (
+    <>
+      <LegendSwatch color={EXPECTED} label="Snowflake expected (99 %)" band />
+      <AnomalySwatch />
+    </>
+  ) : null;
 
   return (
     <section aria-labelledby="vitals-heading" className="space-y-4 rounded-2xl bg-card p-4 ring-1 ring-white/10">
@@ -125,6 +169,7 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
               <span className="flex flex-wrap gap-3">
                 <LegendSwatch color={LINE} label="Heart rate" />
                 {usual}
+                {sf}
               </span>
             }
           />
@@ -134,7 +179,14 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
             group={group}
             height={150}
             option={charts.rr}
-            legend={charts.rr ? usual : undefined}
+            legend={
+              charts.rr ? (
+                <span className="flex flex-wrap gap-3">
+                  {usual}
+                  {sf}
+                </span>
+              ) : undefined
+            }
             empty="— no readings in this range (measured only while in bed)"
           />
           <ChartPanel
@@ -158,14 +210,35 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
             height={130}
             option={charts.skin}
           />
-          <ChartPanel title="Movement" hint="wrist motion counts" group={group} height={110} option={charts.motion} />
+          <ChartPanel
+            title="Movement"
+            hint="wrist motion counts"
+            group={group}
+            height={110}
+            option={charts.motion}
+            legend={charts.snowflake.flagged ? <AnomalySwatch /> : undefined}
+          />
           <ChartPanel title="In bed" hint="bed sensor" group={group} height={70} option={charts.bed} />
           <p className="text-sm text-muted-foreground">
             Source: Tiger {data?.res === "1h" ? "vitals_1h" : data?.res === "15m" ? "vitals_15m" : "vitals_1m"} continuous
-            aggregate · gap-filled with locf.
+            aggregate · gap-filled with locf.{" "}
+            {charts.snowflake.buckets > 0
+              ? `Expected range and ◆ from Snowflake ANOMALY_DETECTION on closed 15-min buckets (${charts.snowflake.flagged} of ${charts.snowflake.buckets} flagged in this range).`
+              : "Snowflake anomaly results: none for this range yet."}
           </p>
         </div>
       )}
     </section>
+  );
+}
+
+function AnomalySwatch() {
+  return (
+    <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+      <span aria-hidden style={{ color: ANOMALY }}>
+        ◆
+      </span>
+      Outside expected (Snowflake)
+    </span>
   );
 }

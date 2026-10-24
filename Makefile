@@ -6,7 +6,7 @@ BACKEND  := backend
 FRONTEND := frontend
 DAYS ?=
 
-.PHONY: help install dev up down logs check keygen migrate seed test lint tunnel
+.PHONY: help install dev up down logs check keygen migrate migrate-sf seed sf-load train detect test lint tunnel
 
 help: ## Show this help
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-9s %s\n", $$1, $$2}'
@@ -48,8 +48,20 @@ keygen: ## Generate the Snowflake RSA key pair in ./secrets and print the SQL to
 migrate: ## Apply Tiger SQL migrations in order (backend/sql/tiger)
 	cd $(BACKEND) && uv run python scripts/migrate.py
 
-seed: ## Seed synthetic history: make seed DAYS=3 (default: SEED_DAYS from .env)
+migrate-sf: ## Create the Snowflake VIGIL.CORE tables (backend/sql/snowflake/002, idempotent)
+	cd $(BACKEND) && uv run python scripts/migrate_snowflake.py
+
+seed: ## Seed synthetic history: make seed DAYS=3 (default: SEED_DAYS from .env), then bulk-load Snowflake
 	cd $(BACKEND) && uv run python scripts/seed.py $(if $(DAYS),--days $(DAYS),)
+
+sf-load: ## Re-run the Snowflake bulk load (Tiger vitals_15m + events + residents/staff → VIGIL.CORE)
+	cd $(BACKEND) && uv run python scripts/sync_snowflake.py
+
+train: ## Train the 5 Snowflake ANOMALY_DETECTION models (last night held out), then detect since
+	cd $(BACKEND) && uv run python -u scripts/train_models.py
+
+detect: ## Run Snowflake anomaly detection over last night (or --from/--to) and summarize the flags
+	cd $(BACKEND) && uv run python -u scripts/detect_anomalies.py
 
 test: ## Backend pytest + frontend vitest
 	cd $(BACKEND) && uv run pytest -q

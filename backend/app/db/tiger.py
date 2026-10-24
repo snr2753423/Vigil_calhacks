@@ -27,6 +27,7 @@ from app.scoring.rules import FALL_IMPACT_G
 
 CONNECT_TIMEOUT_S = 10
 MIGRATIONS_DIR = BACKEND_DIR / "sql" / "tiger"
+ANOMALY_LOOKBACK_MIN = 45  # Snowflake anomaly results older than this are stale for scoring (Tiger z instead)
 
 
 class TigerNotConfigured(RuntimeError):
@@ -544,6 +545,18 @@ SCORING_QUERIES: dict[str, str] = {
         WHERE kind = 'note_extract' AND as_of > %(as_of)s - INTERVAL '12 hours' AND as_of <= %(as_of)s
         ORDER BY resident_id, as_of DESC
     """,
+    # Snowflake ANOMALY_DETECTION results (as_of = bucket end): the newest 2 buckets known by as_of,
+    # if fresh enough. Older than the lookback → the fast tier falls back to Tiger z-scores.
+    "anomaly": f"""
+        SELECT resident_id, as_of, payload
+        FROM (SELECT resident_id, as_of, payload,
+                     row_number() OVER (PARTITION BY resident_id ORDER BY as_of DESC) AS rn
+              FROM ai_insights
+              WHERE kind = 'anomaly' AND as_of <= %(as_of)s
+                AND as_of > %(as_of)s - INTERVAL '{ANOMALY_LOOKBACK_MIN} minutes') s
+        WHERE rn <= 2
+        ORDER BY resident_id, as_of DESC
+    """,
 }
 
 
@@ -652,3 +665,131 @@ async def vitals_series(
         GROUP BY 1 ORDER BY 1
     """  # table/step/expressions come from the constant maps above
     return await fetch_dicts(conn, sql, {"rid": resident_id, "start": start, "end": end})
+
+
+# --------------------------------------------------------------------------- Snowflake sync (SPEC §9 ①)
+
+# Only one process syncs to Snowflake at a time (a seed's bulk load, or one backend's sync loop).
+SYNC_LOCK_KEY = SEED_LOCK_KEY + 2
+
+
+async def try_lock_sync(conn: psycopg.AsyncConnection) -> bool:
+    (ok,) = await fetchone(conn, "SELECT pg_try_advisory_lock(%s)", (SYNC_LOCK_KEY,))
+    return bool(ok)
+
+
+async def lock_sync(conn: psycopg.AsyncConnection) -> None:
+    await execute(conn, "SELECT pg_advisory_lock(%s)", (SYNC_LOCK_KEY,))
+
+
+async def unlock_sync(conn: psycopg.AsyncConnection) -> None:
+    await execute(conn, "SELECT pg_advisory_unlock(%s)", (SYNC_LOCK_KEY,))
+
+
+async def sync_frontier(conn: psycopg.AsyncConnection, as_of: datetime) -> datetime | None:
+    """Newest simulated row at or before as_of: everything older is complete (the live loop and its
+    catch-up write all residents tick by tick), so buckets that end before it can be synced."""
+    row = await fetchone(
+        conn,
+        "SELECT max(ts) FROM vitals WHERE source = 0 AND ts > %(as_of)s - INTERVAL '3 days' AND ts <= %(as_of)s",
+        {"as_of": as_of},
+    )
+    return row[0] if row else None
+
+
+async def get_sync_state(conn: psycopg.AsyncConnection) -> dict[str, dict]:
+    rows = await fetch_dicts(conn, "SELECT name, watermark, rows_synced, updated_at FROM sync_state")
+    return {r["name"]: r for r in rows}
+
+
+async def set_sync_state(conn: psycopg.AsyncConnection, name: str, watermark: datetime | None, add_rows: int) -> None:
+    await execute(
+        conn,
+        """INSERT INTO sync_state (name, watermark, rows_synced, updated_at) VALUES (%s, %s, %s, now())
+           ON CONFLICT (name) DO UPDATE SET watermark = coalesce(excluded.watermark, sync_state.watermark),
+                                            rows_synced = sync_state.rows_synced + excluded.rows_synced,
+                                            updated_at = now()""",
+        (name, watermark, add_rows),
+    )
+
+
+async def reset_sync_state(conn: psycopg.AsyncConnection) -> None:
+    await execute(conn, "DELETE FROM sync_state")
+
+
+async def vitals_15m_closed(conn: psycopg.AsyncConnection, after: datetime | None, cutoff: datetime) -> list[dict]:
+    """vitals_15m buckets that start after `after` (None = all) and end at or before `cutoff`."""
+    return await fetch_dicts(
+        conn,
+        """SELECT resident_id, bucket, hr_avg, hr_min, hr_max, approx_percentile(0.5, hr_pct) AS hr_p50, hrv_avg,
+                  rr_avg, rr_min, rr_max, spo2_min, skin_temp_avg, motion_sum, impact_max, in_bed_frac,
+                  bed_motion_avg, worn_frac, n
+           FROM vitals_15m
+           WHERE (%(after)s::timestamptz IS NULL OR bucket > %(after)s) AND bucket <= %(cutoff)s - INTERVAL '15 minutes'
+           ORDER BY bucket, resident_id""",
+        {"after": after, "cutoff": cutoff},
+    )
+
+
+async def events_between(conn: psycopg.AsyncConnection, after: datetime | None, cutoff: datetime) -> list[dict]:
+    return await fetch_dicts(
+        conn,
+        """SELECT ts, resident_id, type, staff_id, payload FROM events
+           WHERE (%(after)s::timestamptz IS NULL OR ts > %(after)s) AND ts <= %(cutoff)s
+           ORDER BY ts""",
+        {"after": after, "cutoff": cutoff},
+    )
+
+
+async def reference_rows(conn: psycopg.AsyncConnection) -> tuple[list[dict], list[dict]]:
+    residents = await fetch_dicts(conn, "SELECT * FROM residents ORDER BY resident_id")
+    staff = await fetch_dicts(conn, "SELECT * FROM staff ORDER BY staff_id")
+    return residents, staff
+
+
+# --------------------------------------------------------------------------- ai_insights (Snowflake results cache)
+
+
+async def upsert_insights(conn: psycopg.AsyncConnection, kind: str, rows: Iterable[tuple[int, datetime, dict]]) -> int:
+    """(resident_id, as_of, payload) → ai_insights, replacing any row with the same key."""
+    data = [(rid, kind, as_of, Jsonb(payload)) for rid, as_of, payload in rows]
+    if not data:
+        return 0
+    async with conn.cursor() as cur:
+        await cur.executemany(
+            """INSERT INTO ai_insights (resident_id, kind, as_of, payload) VALUES (%s, %s, %s, %s)
+               ON CONFLICT (resident_id, kind, as_of) DO UPDATE SET payload = excluded.payload, created_at = now()""",
+            data,
+        )
+    return len(data)
+
+
+async def delete_anomaly_insights(conn: psycopg.AsyncConnection, start: datetime, end: datetime) -> None:
+    """Remove cached anomaly results for buckets in [start, end) (whatever reveal delay they were stamped with)."""
+    await execute(
+        conn,
+        """DELETE FROM ai_insights
+           WHERE kind = 'anomaly' AND as_of > %(start)s AND as_of < %(end)s + INTERVAL '2 hours'
+             AND (payload->>'bucket')::timestamptz >= %(start)s AND (payload->>'bucket')::timestamptz < %(end)s""",
+        {"start": start, "end": end},
+    )
+
+
+async def insights_range(
+    conn: psycopg.AsyncConnection, resident_id: int, kind: str, start: datetime, end: datetime
+) -> list[dict]:
+    return await fetch_dicts(
+        conn,
+        """SELECT as_of, payload, created_at FROM ai_insights
+           WHERE resident_id = %s AND kind = %s AND as_of > %s AND as_of <= %s ORDER BY as_of""",
+        (resident_id, kind, start, end),
+    )
+
+
+async def insight_counts(conn: psycopg.AsyncConnection) -> dict[str, dict]:
+    rows = await fetch_dicts(
+        conn,
+        """SELECT kind, count(*) AS n, count(DISTINCT resident_id) AS residents, min(as_of) AS first,
+                  max(as_of) AS last FROM ai_insights GROUP BY kind""",
+    )
+    return {r["kind"]: r for r in rows}

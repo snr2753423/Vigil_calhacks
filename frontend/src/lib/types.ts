@@ -138,7 +138,8 @@ export type Components = {
   p_concern: number;
   p_overdue: number;
   multi_signal: boolean;
-  anom_source: string;
+  anom_source: "snowflake" | "tiger_z";
+  anom_as_of: string | null;
   news2_total: number;
   anomalous_metrics: string[];
   bed_exits: number;
@@ -226,6 +227,29 @@ export type VitalsResponse = {
   ts: string[];
   series: Partial<Record<VitalMetric, (number | null)[]>>;
 };
+
+export type AnomalyMetricKey = "hr" | "rr" | "spo2" | "skin_temp" | "motion";
+
+/** One metric of one closed 15-min bucket from Snowflake ANOMALY_DETECTION (cached in Tiger ai_insights). */
+export type AnomalyMetric = {
+  y: number | null;
+  forecast: number | null;
+  lower: number | null;
+  upper: number | null;
+  z: number | null;
+  severity: number;
+  is_anomaly: boolean;
+};
+
+export type AnomalyBucket = {
+  as_of: string; // when the result became known (bucket end + sync delay)
+  bucket: string; // bucket start
+  metrics: Partial<Record<AnomalyMetricKey, AnomalyMetric>>;
+  anomalous: AnomalyMetricKey[];
+  p_anom: number;
+};
+
+export type AnomalyResponse = { resident_id: number; from: string; to: string; source: string; items: AnomalyBucket[] };
 
 export type StaffMember = {
   staff_id: number;

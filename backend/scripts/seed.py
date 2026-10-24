@@ -2,7 +2,8 @@
 
 Steps: migrations → pause Tiger jobs → truncate → residents/staff/devices → vitals via parallel binary
 COPY → events → refresh the continuous aggregates → run the baseline job once → compress every
-eligible chunk → resume jobs. Prints rows, timings and the compression ratio.
+eligible chunk → resume jobs → bulk-load Snowflake (vitals_15m, events, residents, staff; SPEC §9 ①).
+Prints rows, timings and the compression ratio.
 
 A running backend does not need to be stopped: its live loop pauses on an advisory lock while the seed
 runs, then backfills from the end of the new history.
@@ -16,6 +17,7 @@ from datetime import UTC, datetime
 
 from psycopg.types.json import Jsonb
 from reset_demo import truncate_history  # scripts/ is on sys.path when run as `python scripts/seed.py`
+from sync_snowflake import load_snowflake
 
 from app.config import get_settings
 from app.db import tiger
@@ -141,7 +143,7 @@ async def load_vitals(sims: dict[int, ResidentSim], t0: int, n_ticks: int, write
 # --------------------------------------------------------------------------- main
 
 
-async def run(days: int, seed: int, writers: int) -> None:
+async def run(days: int, seed: int, writers: int, snowflake: bool) -> None:
     settings = get_settings()
     tz = fac.tzinfo(settings.facility_tz)
     roster = cast.build_roster(seed)
@@ -154,6 +156,10 @@ async def run(days: int, seed: int, writers: int) -> None:
         log(f"  migrations   ok ({t})")
         # A running backend's live loop pauses while we hold this lock, then resumes from the new history.
         await tiger.lock_for_seed(conn)
+        # …and its Snowflake sync stands by until the bulk load below has replaced the Snowflake copy.
+        if not await tiger.try_lock_sync(conn):
+            log("  sync         waiting for the backend's Snowflake sync cycle to finish …")
+            await tiger.lock_sync(conn)
 
         now = datetime.now(UTC)
         t_end = (int(now.timestamp()) // fac.TICK_S) * fac.TICK_S
@@ -275,6 +281,22 @@ async def run(days: int, seed: int, writers: int) -> None:
                 await tiger.execute(conn, "SELECT alter_job(%s, scheduled => true)", (job_id,))
             await tiger.unlock_for_seed(conn)
 
+        try:
+            if snowflake and settings.snowflake_configured:
+                t = Timer()
+                log("  snowflake    bulk load → VIGIL.CORE (vitals_15m, events, residents, staff) …")
+                try:
+                    await load_snowflake(conn, log)
+                    log(f"  snowflake    done ({t}) — next: `make train` (anomaly models)")
+                except Exception as exc:  # the Tiger seed is complete either way
+                    log(f"  snowflake    FAILED: {' '.join(str(exc).split())[:300]}")
+                    log("               Tiger is seeded; fix Snowflake and run `make sf-load`, then `make train`")
+            else:
+                log("  snowflake    skipped" + ("" if snowflake else " (--no-snowflake)") +
+                    " — run `make sf-load` later, then `make train`")  # fmt: skip
+        finally:
+            await tiger.unlock_sync(conn)
+
     log(f"seed: done in {total} — {n_vitals:,} vitals rows, {n_events:,} events")
 
 
@@ -284,11 +306,12 @@ def main() -> int:
     parser.add_argument("--days", type=int, default=settings.seed_days)
     parser.add_argument("--seed", type=int, default=settings.sim_seed)
     parser.add_argument("--writers", type=int, default=4, help="parallel COPY connections")
+    parser.add_argument("--no-snowflake", action="store_true", help="skip the Snowflake bulk load")
     args = parser.parse_args()
     if not settings.tiger_configured:
         print("seed: TIGER_DATABASE_URL is not set in .env", file=sys.stderr)
         return 1
-    asyncio.run(run(args.days, args.seed, args.writers))
+    asyncio.run(run(args.days, args.seed, args.writers, not args.no_snowflake))
     return 0
 
 

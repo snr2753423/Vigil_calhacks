@@ -1,6 +1,6 @@
 // Pure helpers for the resident charts (SPEC §11.2): ranges, personal-baseline bands, NEWS2 zones.
 import { facilityHour } from "@/lib/format";
-import type { VitalBaselines } from "@/lib/types";
+import type { AnomalyBucket, AnomalyMetricKey, VitalBaselines } from "@/lib/types";
 
 export type RangeKey = "6h" | "24h" | "7d";
 
@@ -58,6 +58,80 @@ export function spo2Zones(scale: 1 | 2): Zone[] {
         { from: 91.5, to: 93.5, points: 2 },
         { from: 93.5, to: 95.5, points: 1 },
       ];
+}
+
+export const BUCKET_MS = 15 * 60_000;
+
+/** Snowflake's expected range at each chart timestamp: the mean bounds of the 15-min buckets that start
+ *  inside [t, t + stepMs) (one bucket at 1m/15m resolution, four at 1h). `scale` converts sums (movement
+ *  per 15 min → per chart step). Null where the model has no result. */
+export function expectedBand(
+  tsMs: number[],
+  stepMs: number,
+  buckets: AnomalyBucket[],
+  metric: AnomalyMetricKey,
+  scale = 1,
+): Band {
+  const starts = buckets
+    .map((b) => ({ t: Date.parse(b.bucket), m: b.metrics[metric] }))
+    .filter((b) => b.m && b.m.lower !== null && b.m.upper !== null)
+    .sort((a, b) => a.t - b.t);
+  const lower: (number | null)[] = [];
+  const width: (number | null)[] = [];
+  const p50: (number | null)[] = [];
+  let j = 0;
+  for (const t of tsMs) {
+    // the bucket containing t (finer than 15 min) or every bucket starting in [t, t + step) (coarser)
+    const lo = stepMs < BUCKET_MS ? t - BUCKET_MS + 1 : t;
+    const hi = stepMs < BUCKET_MS ? t + 1 : t + stepMs;
+    while (j < starts.length && starts[j].t < lo) j++;
+    let n = 0;
+    let l = 0;
+    let u = 0;
+    let f = 0;
+    for (let k = j; k < starts.length && starts[k].t < hi; k++) {
+      const m = starts[k].m!;
+      l += m.lower!;
+      u += m.upper!;
+      f += m.forecast ?? (m.lower! + m.upper!) / 2;
+      n++;
+    }
+    lower.push(n ? round((l / n) * scale, 2) : null);
+    width.push(n ? round(((u - l) / n) * scale, 2) : null);
+    p50.push(n ? round((f / n) * scale, 2) : null);
+  }
+  return { lower, width, p50 };
+}
+
+export type AnomalyPoint = { t: number; value: number; severity: number; bucket: string; y: number | null };
+
+/** Anomaly dots on the chart's own line: one per flagged bucket, at the chart value of the step that holds
+ *  the bucket's midpoint (so it sits on the line at any resolution or transform). */
+export function anomalyPoints(
+  tsMs: number[],
+  values: (number | null)[],
+  buckets: AnomalyBucket[],
+  metric: AnomalyMetricKey,
+): AnomalyPoint[] {
+  if (tsMs.length < 2) return [];
+  const step = tsMs[1] - tsMs[0];
+  const out: AnomalyPoint[] = [];
+  for (const b of buckets) {
+    const m = b.metrics[metric];
+    if (!m || m.severity <= 0) continue;
+    const mid = Date.parse(b.bucket) + BUCKET_MS / 2;
+    const i = Math.floor((mid - tsMs[0]) / step);
+    if (i < 0 || i >= tsMs.length) continue;
+    // nearest step with a value (a 1-min series can have gaps)
+    let k = -1;
+    for (let d = 0; d <= Math.max(1, Math.round(BUCKET_MS / step)) && k < 0; d++) {
+      if (values[i + d] != null) k = i + d;
+      else if (values[i - d] != null) k = i - d;
+    }
+    if (k < 0) continue;
+    out.push({ t: tsMs[k], value: values[k] as number, severity: m.severity, bucket: b.bucket, y: m.y });
+  }
+  return out;
 }
 
 export function hasData(values: (number | null)[] | undefined): boolean {

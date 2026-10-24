@@ -58,15 +58,23 @@ def tier_for_score(score: float) -> Tier:
 
 @dataclass
 class MetricDeviation:
+    """How far one metric is from this resident's normal: a Tiger z vs the personal baseline (fallback), or
+    a Snowflake ANOMALY_DETECTION result (value vs the model's expected value and 99 % interval)."""
+
     metric: str
     value: float
     z: float
     severity: float
-    p50: float
-    window: int  # 0 = last 15 min, 1 = the 15 min before
+    p50: float  # personal median (Tiger) or the model's forecast (Snowflake)
+    window: int  # 0 = last 15 min / newest bucket, 1 = the 15 min / bucket before
+    lower: float | None = None  # Snowflake expected range
+    upper: float | None = None
+    source: str = "tiger_z"  # tiger_z | snowflake
 
     @property
     def anomalous(self) -> bool:
+        if self.source == "snowflake":
+            return self.severity > 0  # outside the model's 99 % interval, on the side that matters
         return self.severity >= ANOMALOUS_Z / 4.0
 
     @property
@@ -86,7 +94,8 @@ class Components:
     p_concern: float = 0.0
     p_overdue: float = 0.0
     multi_signal: bool = False
-    anom_source: str = "tiger_z"  # Snowflake ANOMALY_DETECTION replaces this in Phase 5
+    anom_source: str = "tiger_z"  # snowflake when ANOMALY_DETECTION results are fresh, else the Tiger z fallback
+    anom_as_of: str | None = None  # when the newest Snowflake result became known
     # detail behind the numbers
     news2_total: int = 0
     anomalous_metrics: list[str] = field(default_factory=list)
@@ -189,6 +198,30 @@ def deviations(f: ResidentFeatures, rid: int, baselines: Baselines, block: int) 
     return out
 
 
+def snowflake_deviations(results: list[dict]) -> dict[str, MetricDeviation]:
+    """Per metric: the higher-severity of the last two Snowflake buckets (SPEC §7d), newest on a tie."""
+    out: dict[str, MetricDeviation] = {}
+    for i, r in enumerate(results[:2]):
+        for metric, v in (r["payload"].get("metrics") or {}).items():
+            if metric not in VITAL_METRICS or v.get("y") is None:
+                continue
+            forecast = v.get("forecast")
+            dev = MetricDeviation(
+                metric=metric,
+                value=float(v["y"]),
+                z=float(v.get("z") or 0.0),
+                severity=float(v.get("severity") or 0.0),
+                p50=float(forecast if forecast is not None else v["y"]),
+                window=i,
+                lower=v.get("lower"),
+                upper=v.get("upper"),
+                source="snowflake",
+            )
+            if metric not in out or dev.severity > out[metric].severity:
+                out[metric] = dev
+    return out
+
+
 def p_anom(devs: dict[str, MetricDeviation]) -> float:
     """1 − Π(1 − severity_m) over metrics (SPEC §7d)."""
     prod = 1.0
@@ -234,7 +267,9 @@ def compute(
         )
     )
 
-    devs = deviations(f, rid, baselines, block)
+    # P_anom: Snowflake ANOMALY_DETECTION when fresh results exist for this resident, else Tiger z-scores.
+    sf_devs = snowflake_deviations(f.anomaly) if f.anomaly else None
+    devs = sf_devs if sf_devs is not None else deviations(f, rid, baselines, block)
     behavior = baselines.behavior_for(rid)
     exits = min(f.exits_tonight / max(behavior.night_bed_exits_p95 or 1.0, 1.0), 1.0) if f.exits_tonight else 0.0
     restless = restlessness(f, baselines.get(rid, block, "motion"))
@@ -251,6 +286,8 @@ def compute(
         p_behav=max(exits, restless, still),
         p_concern=0.0 if concern is None else concern.p_concern,
         p_overdue=1.0 if mins_check is None else min(max(mins_check, 0.0) / OVERDUE_FULL_MIN, 1.0),
+        anom_source="snowflake" if sf_devs is not None else "tiger_z",
+        anom_as_of=f.anomaly[0]["as_of"].isoformat() if f.anomaly else None,
         news2_total=news.total,
         anomalous_metrics=[m for m, d in devs.items() if d.anomalous],
         bed_exits=exits,
@@ -276,9 +313,11 @@ def _fmt_minutes(minutes: float) -> str:
 
 def _deviation_text(d: MetricDeviation, p: Profile, block: int, short: bool = False) -> str:
     """'HR +22% vs her night normal'; short=True drops the label ('+22% vs her night normal')."""
+    label = "" if short else METRIC_LABEL[d.metric] + " "
+    if d.source == "snowflake" and d.lower is not None and d.upper is not None:
+        return _expected_text(d, p, label, short)
     when = BLOCK_NAMES.get(block, "usual")
     whose = f"{p.pronoun} {when} normal"
-    label = "" if short else METRIC_LABEL[d.metric] + " "
     if d.metric == "skin_temp":
         return f"{label}{d.value - d.p50:+.1f} °C vs {whose}"
     if d.metric == "spo2":
@@ -290,6 +329,20 @@ def _deviation_text(d: MetricDeviation, p: Profile, block: int, short: bool = Fa
         return f"Restless: movement {ratio:.0f}× {whose}" if ratio >= 1.5 else f"Movement unusual vs {whose}"
     pct = (d.value - d.p50) / d.p50 * 100 if d.p50 else 0.0
     return f"{label}{pct:+.0f}% vs {whose}"
+
+
+def _expected_text(d: MetricDeviation, p: Profile, label: str, short: bool) -> str:
+    """Snowflake result as a chip: the value against the model's expected range for this resident."""
+    whose = f"{p.pronoun} expected"
+    lo, hi = d.lower, d.upper
+    if d.metric == "skin_temp":
+        return f"{label}{d.value - d.p50:+.1f} °C vs {whose}"
+    if d.metric == "motion":
+        ratio = d.value / max(d.p50, 1.0)
+        return f"Restless: movement {ratio:.0f}× {whose}" if ratio >= 1.5 else f"Movement unusual vs {whose}"
+    unit = "%" if d.metric == "spo2" else ""
+    rng = f"{whose} {lo:.0f}–{hi:.0f}{unit}"
+    return rng if short else f"{label}{d.value:.0f}{unit} ({rng})"
 
 
 _NEWS2_TEXT = {

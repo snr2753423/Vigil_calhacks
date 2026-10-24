@@ -7,9 +7,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import checks, health, notes, queue, residents, sim, staff
+from app.api import checks, health, insights, notes, queue, residents, sim, staff, stats
 from app.config import get_settings
 from app.db import tiger
+from app.deep import sync
 from app.scoring import evaluator
 from app.sim import live_loop
 from app.ws import hub
@@ -27,6 +28,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         tasks.append(live_task)
     if (eval_task := evaluator.start()) is not None:
         tasks.append(eval_task)
+    if (sync_task := sync.start()) is not None:  # Tiger → Snowflake + anomaly detection (deep tier)
+        tasks.append(sync_task)
     try:
         yield
     finally:
@@ -50,4 +53,6 @@ app.include_router(checks.router)
 app.include_router(notes.router)
 app.include_router(staff.router)
 app.include_router(sim.router)
+app.include_router(insights.router)
+app.include_router(stats.router)
 app.include_router(hub.router)

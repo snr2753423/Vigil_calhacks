@@ -100,6 +100,8 @@ class ResidentFeatures:
     spot_ts: datetime | None = None
     note: Note | None = None  # latest note within 12 h
     note_extract: dict[str, Any] | None = None  # Snowflake AI_EXTRACT result (ai_insights) for the latest note
+    # ---- Snowflake ANOMALY_DETECTION (ai_insights kind = anomaly): newest first, at most the last 2 buckets
+    anomaly: list[dict[str, Any]] = field(default_factory=list)  # {"as_of", "payload"}
 
 
 def build_features(as_of: datetime, rows: dict[str, list[dict]], resident_ids) -> dict[int, ResidentFeatures]:
@@ -151,4 +153,9 @@ def build_features(as_of: datetime, rows: dict[str, list[dict]], resident_ids) -
         f = feats.get(r["resident_id"])
         if f is not None and f.note is not None and r["as_of"] >= f.note.ts:
             f.note_extract = r["payload"]
+
+    for r in rows.get("anomaly", ()):  # ordered newest first per resident
+        f = feats.get(r["resident_id"])
+        if f is not None:
+            f.anomaly.append({"as_of": r["as_of"], "payload": r["payload"]})
     return feats

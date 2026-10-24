@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     eval_interval_s: float = 2.0
     snapshot_interval_s: float = 10.0  # full priority_snapshots write cadence (tier changes are written at once)
 
+    # Deep tier: Tiger → Snowflake sync + ANOMALY_DETECTION (SPEC §9 ① ②)
+    snowflake_sync_enabled: bool = True  # background sync (every SYNC_INTERVAL_S) + detection per closed bucket
+    sync_interval_s: float = 60.0
+    anomaly_detect_enabled: bool = True
+    # Training window: up to this many days, ending where last night's holdout starts (SPEC: days −14…−2).
+    # Clamped to the seeded history, so a 3-day seed trains on ~2 days.
+    anomaly_train_days: float = 12.0
+    snowflake_train_warehouse: str | None = None  # optional bigger warehouse for `make train` only
+
     # Live WebSocket
     heartbeat_interval_s: float = 2.0
 

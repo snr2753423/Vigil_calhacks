@@ -1,5 +1,5 @@
 // Tree-shaken ECharts: register only the pieces Vigil's charts use.
-import { BarChart, LineChart } from "echarts/charts";
+import { BarChart, LineChart, ScatterChart } from "echarts/charts";
 import {
   GridComponent,
   MarkAreaComponent,
@@ -12,6 +12,7 @@ import { CanvasRenderer } from "echarts/renderers";
 echarts.use([
   BarChart,
   LineChart,
+  ScatterChart,
   GridComponent,
   MarkAreaComponent,
   MarkLineComponent,

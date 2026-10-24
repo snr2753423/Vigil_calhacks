@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { offsetForDisplayTime } from "@/lib/display-clock";
 import { describeEvent } from "@/lib/events";
 import { formatMinutes } from "@/lib/format";
-import { baselineBand, deltaVsBaseline, spo2Zones, todBlock } from "@/lib/vitals";
+import type { AnomalyBucket } from "@/lib/types";
+import { anomalyPoints, baselineBand, deltaVsBaseline, expectedBand, spo2Zones, todBlock } from "@/lib/vitals";
 
 const baselines = {
   hr: { "0": { p05: 55, p50: 60, p95: 70 }, "3": { p05: 65, p50: 72, p95: 85 } },
@@ -51,5 +52,44 @@ describe("formatting", () => {
     expect(describeEvent({ ts: "", type: "check_logged", staff_id: 1, payload: { kind: "round", round: "02:00" } }).title).toBe(
       "Round check (02:00)",
     );
+  });
+});
+
+const T0 = Date.parse("2026-10-16T09:00:00Z");
+const MIN = 60_000;
+const bucket = (startMin: number, lower: number, upper: number, severity = 0, y = 70): AnomalyBucket => ({
+  as_of: new Date(T0 + (startMin + 20) * MIN).toISOString(),
+  bucket: new Date(T0 + startMin * MIN).toISOString(),
+  metrics: { hr: { y, forecast: (lower + upper) / 2, lower, upper, z: severity ? 4 : 0, severity, is_anomaly: severity > 0 } },
+  anomalous: severity ? ["hr"] : [],
+  p_anom: severity,
+});
+
+describe("Snowflake overlays", () => {
+  const buckets = [bucket(0, 60, 70), bucket(15, 62, 72, 0.6, 85), bucket(30, 64, 74), bucket(45, 66, 76)];
+
+  it("maps each 1-min step to the bucket that contains it", () => {
+    const ts = [0, 14, 15, 29, 70].map((m) => T0 + m * MIN);
+    const b = expectedBand(ts, MIN, buckets, "hr");
+    expect(b.lower).toEqual([60, 60, 62, 62, null]);
+    expect(b.width).toEqual([10, 10, 10, 10, null]);
+  });
+
+  it("averages the four buckets of an hour at 1-h resolution and scales sums", () => {
+    const b = expectedBand([T0], 60 * MIN, buckets, "hr", 2);
+    expect(b.lower).toEqual([126]); // mean lower 63 × 2
+    expect(b.width).toEqual([20]);
+  });
+
+  it("puts a dot on the line for each flagged bucket only", () => {
+    const ts = Array.from({ length: 60 }, (_, i) => T0 + i * MIN);
+    const values: (number | null)[] = ts.map((_, i) => 60 + i);
+    values[22] = null; // gap at the bucket's midpoint (09:22:30 → step 22): the nearest value is used
+    const pts = anomalyPoints(ts, values, buckets, "hr");
+    expect(pts).toHaveLength(1);
+    expect(pts[0].t).toBe(T0 + 23 * MIN);
+    expect(pts[0].value).toBe(83);
+    expect(pts[0].severity).toBe(0.6);
+    expect(anomalyPoints(ts, values, buckets, "rr")).toEqual([]);
   });
 });

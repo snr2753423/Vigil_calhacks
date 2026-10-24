@@ -75,7 +75,11 @@ Compose reads `.env` and mounts `./secrets` read-only into the backend. The `Cad
 | `make check` | Tiger + Snowflake connection check (PASS/FAIL table) |
 | `make keygen` | Snowflake RSA key pair + the SQL to register it |
 | `make migrate` | Apply `backend/sql/tiger/*.sql` in order (idempotent, safe to re-run) |
-| `make seed DAYS=3` | Truncate Tiger and regenerate N days of synthetic history ending now (N ≥ 2) |
+| `make migrate-sf` | Create the Snowflake `VIGIL.CORE` tables (`backend/sql/snowflake/002_tables.sql`, idempotent) |
+| `make seed DAYS=3` | Truncate Tiger, regenerate N days of synthetic history ending now (N ≥ 2), then bulk-load Snowflake |
+| `make sf-load` | Re-run the Snowflake bulk load alone (empties `VIGIL.CORE` first) |
+| `make train` | Train the 5 Snowflake anomaly models (last night held out), detect since, summarize the cast |
+| `make detect` | Re-run Snowflake anomaly detection over last night (or `--from/--to`) and summarize |
 | `make test` | backend pytest + frontend vitest |
 | `make lint` | ruff + eslint + `tsc --noEmit` |
 | `make tunnel` | cloudflared HTTPS tunnel to :8080 |
@@ -85,6 +89,61 @@ Compose reads `.env` and mounts `./secrets` read-only into the backend. The `Cad
 The layout follows SPEC §5. `backend/app/` holds `api/`, `ws/`, `db/` (`tiger.py`, `snowflake_sql.py`, `snowflake_rest.py`), `sim/`, `scoring/`, `deep/` and `devices/`. SQL lives in `backend/sql/{tiger,snowflake}` and scripts in `backend/scripts/`. `frontend/` is a Next.js App Router app. Modules for later phases are placeholders whose docstrings name the phase that fills them in.
 
 ## Status
+
+**Phase 5 (Snowflake core: sync + anomaly detection): built; acceptance partly met (see Known issues)**
+
+What works:
+- **Snowflake tables** (`backend/sql/snowflake/002_tables.sql`, `make migrate-sf`, idempotent).
+  - `VIGIL.CORE`: `RESIDENTS, STAFF, VITALS_15M, EVENTS, CHECKS, NURSE_NOTES, ALERTS, ANOMALY_RESULTS, FORECAST_RESULTS, AI_ASSESSMENTS, HANDOFFS`.
+  - Timestamps are `TIMESTAMP_NTZ` holding UTC. JSON lands as real `VARIANT`/`ARRAY`: `write_df` stages through a temp table and `PARSE_JSON`.
+  - `001_setup.sql` stays the one-time ACCOUNTADMIN bootstrap (`--include-setup` runs it too).
+- **Sync** (`app/deep/sync.py`):
+  - `make seed` ends with a bulk load: 120 residents, 15 staff, ~37k `vitals_15m` buckets and ~10k events, split into `EVENTS` + `CHECKS` / `NURSE_NOTES` / `ALERTS`. It takes ~25 s on a 3-day seed.
+  - The backend then syncs every 60 s: closed buckets past the watermark plus new events, via `write_pandas`. Watermarks and cumulative row counts live in Tiger `sync_state`.
+  - A bucket is synced only once it ended 5 min before the simulator's data frontier, so cagg refreshes are final and a catch-up backfill is never synced half-written.
+  - A Tiger advisory lock keeps the seed's bulk load, `make train`/`make detect` and the backend loop from overlapping. After a restart or error the first cycle deletes Snowflake rows past the watermarks (no duplicates).
+  - Snowflake truncation lives in `scripts/reset_demo.py` (AGENTS rule 8).
+- **Anomaly models** (`sql/snowflake/004_models.sql`, `make train`):
+  - 5 multi-series `SNOWFLAKE.ML.ANOMALY_DETECTION` models: `ML.AD_HR` (HR_AVG), `AD_RR` (RR_AVG), `AD_SPO2` (SPO2_MIN), `AD_SKIN_TEMP` (SKIN_TEMP_AVG), `AD_MOTION` (MOTION_SUM).
+  - Each has `SERIES_COLNAME = RESIDENT_ID`, `TIMESTAMP_COLNAME = BUCKET_TS`, exogenous `IN_BED_FRAC`, and is unsupervised.
+  - The training window lives in `ML.TRAINING_WINDOW`: up to `ANOMALY_TRAIN_DAYS` (default 12) days ending at last night's holdout start, clamped to the seeded history. The five train in parallel and each one's time is printed. Optional `SNOWFLAKE_TRAIN_WAREHOUSE` trains on a bigger warehouse.
+  - Training metadata goes to Tiger `sim_meta.anomaly_models`, tied to the seed. A re-seed invalidates the models until `make train` runs again.
+- **Detection** (`app/deep/anomaly.py`):
+  - `DETECT_ANOMALIES` with `prediction_interval 0.99` for all residents, the five models in parallel. It runs after each sync that closed new buckets, and on demand via `make detect`.
+  - Severity: z from `PERCENTILE` (`DISTANCE` once it saturates). 0 inside the 99 % interval, linear to 1 at |z| = 5, one-sided for SpO₂ (low) and movement (high).
+  - Every call gets a 24 h lead-in of preceding buckets (never before the end of the training data), and lead-in results are dropped. The model conditions on the input's own recent buckets, so a window that starts cold flags almost everyone in its first buckets. With the lead-in, a night-only run matches a contiguous run exactly.
+  - Results go to `CORE.ANOMALY_RESULTS` and are mirrored to Tiger `ai_insights` (kind `anomaly`), stamped bucket end + 10 min (when live knows them, so replay never sees them early). Re-detection replaces earlier results for those buckets.
+- **P_anom** (`priority.py`):
+  - When a resident has a Snowflake result from the last 45 min, P_anom = 1 − Π(1 − severity) over the worse of the last 2 buckets per metric. "Anomalous" (multi-signal) means outside the 99 % interval. Otherwise the Tiger z fallback applies.
+  - Factor chips read e.g. "HR 86 (her expected 56–66)" and "Skin temp +0.8 °C vs her expected".
+  - "Why this score" shows the source and when the result became known.
+- **Charts**:
+  - HR, RR, SpO₂ and skin temp get the model's expected range (dashed edges, light fill). Every flagged bucket gets an amber ◆ on the line: HR, RR, SpO₂, skin temp and movement.
+  - Data comes from `GET /api/insights/{id}?kind=anomaly&from&to`, read from the Tiger cache; the charts never wait on Snowflake.
+- **`GET /api/stats/snowflake`**: calls / errors / avg ms per feature (`connect`, `sync.*`, `bulk.*`, `anomaly.detect.<metric>`, `anomaly.store`, `anomaly.train.*`, …), the sync and detection state, watermarks, cumulative rows, the model metadata and ai_insights counts. `/api/health` adds `deep`.
+- **Tests**: backend **245** passed (severity mapping, PERCENTILE/DISTANCE z, detection lead-in, result parsing and payloads, the SQL, P_anom from Snowflake vs the fallback, multi-signal, factor text, sync frames and cutoffs). Frontend **21** passed (expected band at 1m/1h and the dots). `make lint` is clean.
+
+Verified against the real accounts (3-day seed):
+- **`make train`**: window 13 Oct 19:30 → 15 Oct 19:00 UTC (2.0 days). Training took 1081–1151 s per model on XSMALL, all five in parallel, 19 min in total. Detection over the following 30 h (62,332 results) took 237 s.
+- **Last night** (`make detect`):
+  - Alvarez is flagged on **HR from 23:30, RR from 22:00, skin temp from 23:00**, all before 02:14. **Motion is not flagged** (see below).
+  - Rossi: one SpO₂ flag (a real simulated dip, 92 % vs 95 % expected). Kim: 11 low-severity flags (HR below expected, skin temp).
+  - In the gated replay, Kim briefly reaches WATCH twice (36–40) and Rossi once (38). Neither reaches HIGH.
+  - Every resident outside the cast: ~3 % of resident-buckets flagged, against 1 % expected for a 99 % interval.
+- **Live**: buckets sync ~5 min after they close. Detection of one new bucket takes ~100–230 s, so results land ~8–10 min after the bucket.
+- **Without Snowflake**: with `SNOWFLAKE_ACCOUNT`/`USER` blank, the app runs (sync `disabled`, queue/resident/insights all 200) and scores from the Tiger z fallback wherever no fresh result exists. With an unreachable account, the sync loop logs, backs off and retries; the event loop is unaffected.
+- **Alvarez HR** last night: max 98 bpm before 03:50; the first reading > 100 is at 03:51:40 (SPEC §8 holds).
+
+Known issues:
+- **2 days of training is too little.** The models don't learn the time-of-day pattern from two nights. Alvarez's in-bed night movement is forecast at ~700–1400 counts with an interval of −900…2500, while her real nights have a median of 37, so her 3× restlessness is invisible. Kim's night HR is expected near her daytime HR, which causes the false flags. Re-seed with `make seed DAYS=14` (12-day window) and retrain.
+- **Training time** scales with history. 2 days took 19 min on XSMALL, so 12 days may take well over an hour. Use `SNOWFLAKE_TRAIN_WAREHOUSE` (MEDIUM or larger) for `make train`.
+- **The Alvarez bookmarks (WATCH 23:40 → HIGH 01:30 → #1 02:14) do not hold, with or without Snowflake.** Two SPEC floors fire first:
+  - The 21:30 "more confused than usual" note makes NEWS2 consciousness 3, which forces HIGH from 21:32.
+  - Each of her 4 unassisted night bed exits (Morse 55, 1-assist) is fall prevention = 90, i.e. CRITICAL at 22:38, 23:31, 01:52 and 03:51.
+
+  Snowflake only moves the ≤ 25-point anomaly term. Results: 23:40 CRITICAL (bed exit held), 01:30 CRITICAL 81, 02:14 HIGH 79 at #1. Her brief WATCH dips are the 30-min suppression after logged checks. A scenario or spec change is needed (not weights); this is open with the human.
+- A detection run happens inside the sync loop, so the 1-min sync pauses for its ~2–4 min once per bucket.
+- Rows synced and call counts in `/api/stats/snowflake` are per backend process. Cumulative rows come from `sync_state`; training is done by `make train`, so its call counts appear only in that process's output and in `sim_meta`.
 
 **Phase 4 (core UI: Rounds Queue, resident detail, admin): done**
 

@@ -1,3 +1,4 @@
+import { facilityHHMM } from "@/lib/format";
 import type { ComponentKey, Components } from "@/lib/types";
 
 // Each bar is a component's points out of its maximum; both come from the backend (SPEC §7d weights).
@@ -6,7 +7,10 @@ const PARTS: { key: ComponentKey; label: string; note?: (c: Components) => strin
   {
     key: "anom",
     label: "Change vs personal normal",
-    note: (c) => (c.anom_source === "tiger_z" ? "Tiger baseline z-scores" : "Snowflake anomaly detection"),
+    note: (c) =>
+      c.anom_source === "snowflake"
+        ? `Snowflake anomaly detection${c.anom_as_of ? ` · known ${facilityHHMM(Date.parse(c.anom_as_of))}` : ""}`
+        : "Tiger baseline z-scores (no fresh Snowflake result)",
   },
   { key: "trend", label: "Forecast trend", note: () => "Snowflake forecast (later phase)" },
   { key: "behav", label: "Behavior", note: () => "bed exits · restlessness · stillness" },
