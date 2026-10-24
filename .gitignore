@@ -8,9 +8,11 @@ __pycache__/
 .venv/
 *.pyc
 .pytest_cache/
+.ruff_cache/
 # node
 node_modules/
 .next/
+*.tsbuildinfo
 # generated data
 data/care_plans/
 # os
