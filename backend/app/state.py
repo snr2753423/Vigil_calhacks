@@ -14,6 +14,7 @@ class SimState:
     paused: bool = False
     force_night: bool = False
     display_clock_offset_s: int = 0
+    simulated_band: bool = False  # fallback: simulate R-120 in live mode instead of the Polar band + iPhone
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # Simulation / facility
     seed_days: int = 3
     facility_tz: str = "America/Los_Angeles"
+    sim_seed: int = 1337  # seeded RNG: same seed → same residents, same history
+    sim_live_enabled: bool = True  # stream simulated residents into Tiger while the backend runs
+    sim_backfill_max_hours: float = 48.0  # on startup, fill at most this much of a gap since the last row
+    r120_resting_hr: float | None = None  # presenter's measured resting HR, used for R-120's seeded history
 
     # Live WebSocket
     heartbeat_interval_s: float = 2.0
