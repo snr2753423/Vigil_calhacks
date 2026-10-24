@@ -221,3 +221,9 @@ def test_detection_gets_lead_in_context_but_keeps_only_the_requested_range(monke
     det = anomaly.run_detection(None, start, end, input_start=start - timedelta(hours=24), metrics=("hr",))
     assert "BUCKET_TS >= ''2026-10-15 05:00:00''" in seen[0]
     assert [r["bucket"].hour for r in det.results] == [5, 6] and det.ok
+
+
+def test_motion_detection_reads_the_night_in_bed_view() -> None:
+    start, end = datetime(2026, 10, 16, 5, tzinfo=UTC), datetime(2026, 10, 16, 13, 30, tzinfo=UTC)
+    assert "FROM ML.MOTION_NIGHT_IN_BED WHERE" in anomaly.detect_sql("motion", start, end)
+    assert "FROM CORE.VITALS_15M WHERE" in anomaly.detect_sql("hr", start, end)

@@ -40,10 +40,10 @@ def train(sconn, train_from: datetime, train_to: datetime) -> dict[str, dict]:
     sf.query(
         sconn,
         """MERGE INTO ML.TRAINING_WINDOW w USING (SELECT 'anomaly' AS NAME) s ON w.NAME = s.NAME
-           WHEN MATCHED THEN UPDATE SET TRAIN_FROM = %(f)s, TRAIN_TO = %(t)s, UPDATED_AT = SYSDATE()
-           WHEN NOT MATCHED THEN INSERT (NAME, TRAIN_FROM, TRAIN_TO, UPDATED_AT)
-                                 VALUES ('anomaly', %(f)s, %(t)s, SYSDATE())""",
-        {"f": sync.naive_utc(train_from), "t": sync.naive_utc(train_to)},
+           WHEN MATCHED THEN UPDATE SET TRAIN_FROM = %(f)s, TRAIN_TO = %(t)s, FACILITY_TZ = %(tz)s, UPDATED_AT = SYSDATE()
+           WHEN NOT MATCHED THEN INSERT (NAME, TRAIN_FROM, TRAIN_TO, FACILITY_TZ, UPDATED_AT)
+                                 VALUES ('anomaly', %(f)s, %(t)s, %(tz)s, SYSDATE())""",
+        {"f": sync.naive_utc(train_from), "t": sync.naive_utc(train_to), "tz": get_settings().facility_tz},
         feature="anomaly.train",
     )
     sizes = {}
@@ -74,22 +74,57 @@ def train(sconn, train_from: datetime, train_to: datetime) -> dict[str, dict]:
     }
 
 
-async def run(days: float, detect: bool) -> None:
+def existing_models(sconn, train_to: datetime, seeded_at: datetime) -> tuple[datetime, dict[str, dict]]:
+    """Blocking. For --no-train: the window and models a previous `make train` left in Snowflake, accepted only
+    if that run trained them for this seed: same window end and time zone, every model created after both the
+    window was written and the seed was loaded (an interrupted run or an older seed fails this)."""
+    rows = sf.query(
+        sconn, "SELECT TRAIN_FROM, TRAIN_TO, FACILITY_TZ, UPDATED_AT FROM ML.TRAINING_WINDOW WHERE NAME = 'anomaly'"
+    )
+    if not rows or rows[0][1].replace(tzinfo=UTC) != train_to:
+        raise SystemExit("train: the models in Snowflake were not trained for this seed's window — run `make train`")
+    train_from, _, tz, updated_at = rows[0]
+    if tz != get_settings().facility_tz:
+        raise SystemExit(
+            f"train: models were trained for time zone {tz!r}, not {get_settings().facility_tz!r} — run `make train`"
+        )
+    not_before = max(updated_at.replace(tzinfo=UTC), seeded_at)
+    created = {
+        r["name"]: r["created_on"]
+        for r in sf.query_dicts(sconn, "SHOW SNOWFLAKE.ML.ANOMALY_DETECTION IN SCHEMA ML", feature="anomaly.train")
+    }
+    missing = [m for m, _ in anomaly.MODELS.values() if m not in created]
+    if missing:
+        raise SystemExit(f"train: models missing in VIGIL.ML: {', '.join(missing)} — run `make train`")
+    stale = [m for m, _ in anomaly.MODELS.values() if created[m] < not_before]
+    if stale:
+        raise SystemExit(
+            f"train: models older than this seed or training window: {', '.join(stale)} — run `make train`"
+        )
+    return train_from.replace(tzinfo=UTC), {
+        m: {"model": f"ML.{name}", "seconds": None} for m, (name, _) in anomaly.MODELS.items()
+    }
+
+
+async def run(days: float, detect: bool, retrain: bool) -> None:
+    # Short Tiger sessions only: training holds no Tiger connection (an idle one is closed within the hour).
     async with tiger.connect(application_name="vigil-train") as conn:
         seed = await tiger.get_meta(conn, "seed")
         holdout = await tiger.get_meta(conn, "baseline_holdout")
         state = await tiger.get_sync_state(conn)
-        if not seed or not holdout:
-            raise SystemExit("train: no seed metadata — run `make seed` first")
-        if sync.VITALS_WM not in state:
-            raise SystemExit("train: Snowflake has no vitals yet — run `make sf-load` (or `make seed`)")
+    if not seed or not holdout:
+        raise SystemExit("train: no seed metadata — run `make seed` first")
+    if sync.VITALS_WM not in state:
+        raise SystemExit("train: Snowflake has no vitals yet — run `make sf-load` (or `make seed`)")
+    train_to = datetime.fromisoformat(holdout["start"])
 
-        sconn = await asyncio.to_thread(sf.connect)
-        try:
+    sconn = await asyncio.to_thread(sf.connect)
+    try:
+        t0 = time.perf_counter()
+        if retrain:
             ((first,),) = await asyncio.to_thread(sf.query, sconn, "SELECT min(BUCKET_TS) FROM CORE.VITALS_15M")
             if first is None:
                 raise SystemExit("train: CORE.VITALS_15M is empty — run `make sf-load`")
-            train_to = datetime.fromisoformat(holdout["start"])
             train_from = max(first.replace(tzinfo=UTC), train_to - timedelta(days=days))
             span_days = (train_to - train_from).total_seconds() / 86400
             print(f"train: window {train_from:%Y-%m-%d %H:%M} → {train_to:%Y-%m-%d %H:%M} UTC "
@@ -97,12 +132,19 @@ async def run(days: float, detect: bool) -> None:
             if wh := get_settings().snowflake_train_warehouse:
                 await asyncio.to_thread(sf.query, sconn, f"USE WAREHOUSE {wh}", feature="anomaly.train")
                 print(f"train: using warehouse {wh}")
-            t0 = time.perf_counter()
             models = await asyncio.to_thread(train, sconn, train_from, train_to)
             if wh:
                 await asyncio.to_thread(sf.query, sconn, f"USE WAREHOUSE {get_settings().snowflake_warehouse}")
-            total = time.perf_counter() - t0
-            print(f"train: done in {total:.1f}s")
+            print(f"train: done in {time.perf_counter() - t0:.1f}s")
+        else:
+            seeded_at = datetime.fromisoformat(seed["seeded_at"])
+            train_from, models = await asyncio.to_thread(existing_models, sconn, train_to, seeded_at)
+            span_days = (train_to - train_from).total_seconds() / 86400
+            print(f"train: --no-train: registering the 5 models already trained on {train_from:%Y-%m-%d %H:%M} → "
+                  f"{train_to:%Y-%m-%d %H:%M} UTC ({span_days:.1f} days)")  # fmt: skip
+        total = time.perf_counter() - t0
+
+        async with tiger.connect(application_name="vigil-train") as conn:
             await tiger.set_meta(
                 conn,
                 anomaly.META_KEY,
@@ -112,7 +154,7 @@ async def run(days: float, detect: bool) -> None:
                     "train_from": train_from.isoformat(),
                     "train_to": train_to.isoformat(),
                     "days": round(span_days, 2),
-                    "seconds": round(total, 1),
+                    "seconds": round(total, 1) if retrain else None,
                     "prediction_interval": anomaly.PREDICTION_INTERVAL,
                     "models": models,
                 },
@@ -139,8 +181,8 @@ async def run(days: float, detect: bool) -> None:
                 for m, err in det.errors.items():
                     print(f"  ✗ {m}: {err}")
                 await summarize(conn, *await last_night(conn))
-        finally:
-            sconn.close()
+    finally:
+        sconn.close()
 
 
 def main() -> int:
@@ -148,11 +190,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--days", type=float, default=settings.anomaly_train_days, help="max training days")
     parser.add_argument("--no-detect", action="store_true", help="train only")
+    parser.add_argument(
+        "--no-train", action="store_true", help="register the models already in Snowflake for this seed, then detect"
+    )
     args = parser.parse_args()
     if not (settings.snowflake_configured and settings.tiger_configured):
         print("train: Tiger and Snowflake must both be configured in .env", file=sys.stderr)
         return 1
-    asyncio.run(run(args.days, not args.no_detect))
+    asyncio.run(run(args.days, not args.no_detect, not args.no_train))
     return 0
 
 

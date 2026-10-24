@@ -19,6 +19,11 @@ TS = datetime(2026, 10, 16, 4, 30, tzinfo=UTC)
         ("Found on the floor beside his bed at 04:11.", "high", "unknown"),
         ("Resting quietly, no concerns noted.", "none", "unknown"),
         ("Baseline confusion, pleasant and redirectable.", "med", "unknown"),
+        ("Rosa was a bit restless at bedtime, only drank half her fluids.", "low", "unknown"),
+        ("Restless all night, only drank half her fluids.", "med", "unknown"),
+        ("A bit restless, complaining of pain.", "med", "unknown"),
+        ("A little tired after dinner. Restless all night, only drank half her fluids.", "med", "unknown"),
+        ("Rosa seems more confused than usual, warm to touch.", "med", "worse"),
     ],
 )
 def test_keyword_fallback(text, level, confusion) -> None:

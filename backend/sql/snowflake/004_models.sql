@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS ML.TRAINING_WINDOW (
     TRAIN_TO   TIMESTAMP_NTZ NOT NULL,  -- exclusive
     UPDATED_AT TIMESTAMP_NTZ
 );
+ALTER TABLE ML.TRAINING_WINDOW ADD COLUMN IF NOT EXISTS FACILITY_TZ VARCHAR;
 
 CREATE OR REPLACE VIEW ML.AD_TRAIN_HR AS
 SELECT v.RESIDENT_ID, v.BUCKET_TS, v.HR_AVG, v.IN_BED_FRAC
@@ -35,11 +36,22 @@ FROM CORE.VITALS_15M v JOIN ML.TRAINING_WINDOW w ON w.NAME = 'anomaly'
 WHERE v.BUCKET_TS >= w.TRAIN_FROM AND v.BUCKET_TS < w.TRAIN_TO AND v.SKIN_TEMP_AVG IS NOT NULL
   AND v.IN_BED_FRAC IS NOT NULL;
 
-CREATE OR REPLACE VIEW ML.AD_TRAIN_MOTION AS
+-- Movement is modeled as night-time restlessness in bed only (in bed ≥ 90 % of the bucket, 23:00–06:59
+-- facility time). Over the whole day one resident's motion spans asleep (~40 counts / 15 min) to walking
+-- (thousands); the model's single error width per series then makes its night interval so wide that no
+-- in-bed restlessness can fall outside it. ML.MOTION_NIGHT_IN_BED is the one definition of those rows:
+-- training reads it below and detection selects from it (anomaly.SOURCES), with the time zone the models
+-- were trained for (ML.TRAINING_WINDOW.FACILITY_TZ).
+CREATE OR REPLACE VIEW ML.MOTION_NIGHT_IN_BED AS
 SELECT v.RESIDENT_ID, v.BUCKET_TS, v.MOTION_SUM, v.IN_BED_FRAC
 FROM CORE.VITALS_15M v JOIN ML.TRAINING_WINDOW w ON w.NAME = 'anomaly'
-WHERE v.BUCKET_TS >= w.TRAIN_FROM AND v.BUCKET_TS < w.TRAIN_TO AND v.MOTION_SUM IS NOT NULL
-  AND v.IN_BED_FRAC IS NOT NULL;
+WHERE v.MOTION_SUM IS NOT NULL AND v.IN_BED_FRAC >= 0.9
+  AND HOUR(CONVERT_TIMEZONE('UTC', w.FACILITY_TZ, v.BUCKET_TS)) NOT BETWEEN 7 AND 22;
+
+CREATE OR REPLACE VIEW ML.AD_TRAIN_MOTION AS
+SELECT m.RESIDENT_ID, m.BUCKET_TS, m.MOTION_SUM, m.IN_BED_FRAC
+FROM ML.MOTION_NIGHT_IN_BED m JOIN ML.TRAINING_WINDOW w ON w.NAME = 'anomaly'
+WHERE m.BUCKET_TS >= w.TRAIN_FROM AND m.BUCKET_TS < w.TRAIN_TO;
 
 CREATE OR REPLACE SNOWFLAKE.ML.ANOMALY_DETECTION ML.AD_HR(
     INPUT_DATA => TABLE(ML.AD_TRAIN_HR),

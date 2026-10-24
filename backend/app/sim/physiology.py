@@ -206,6 +206,9 @@ def _hour_of(epoch: float, anchor_epoch: float, anchor_hour: float) -> float:
     return (anchor_hour + (epoch - anchor_epoch) / 3600) % 24
 
 
+FIDGETS_PER_NIGHT = 3.0  # small movements while asleep, × the resident's `restless` trait
+
+
 def assist_check(rid: int, unit: str, ts: float, midnight: float, reason: str = "assisted to bathroom") -> SimEvent:
     """The CNA on duty answers the call light / bed alarm at `ts`, just before the resident gets up.
 
@@ -244,7 +247,7 @@ def make_day_plan(p: PhysioParams, day: date, seed: int, tz: ZoneInfo) -> DayPla
     while t < wake:
         turns.append(float(t))
         t += p.turn_cadence_min * 60 * rng.uniform(0.6, 1.4)
-    fidgets = sorted(float(x) for x in rng.uniform(settled, wake, size=rng.poisson(3 * p.restless)))
+    fidgets = sorted(float(x) for x in rng.uniform(settled, wake, size=rng.poisson(FIDGETS_PER_NIGHT * p.restless)))
 
     charge = at(24 + p.charge_hour + rng.normal(0, 20) / 60)
     band_off = [(charge, charge + rng.uniform(25, 40) * 60)]

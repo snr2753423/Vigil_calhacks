@@ -15,6 +15,7 @@ import numpy as np
 
 from app.sim import facility as fac
 from app.sim.physiology import (
+    FIDGETS_PER_NIGHT,
     DayPlan,
     PhysioParams,
     ResidentSim,
@@ -555,18 +556,23 @@ FIXED_ALARM_CLEAR_UNTIL_H = 27.0 + 50 / 60  # 03:50: no fixed-threshold alarm fo
 class AlvarezDrift(_NightScript):
     """Rosa Alvarez (17): slow UTI → early-sepsis drift from the previous afternoon.
 
-    HR 68 → 88 by 02:14 (still under 100), RR 16 → 22, wrist skin temp +0.8 °C, restless nights with 5 bed
-    exits, a 21:30 CNA note. No fixed threshold (HR > 100, RR > 24, SpO2 < 90) fires before ~03:50.
+    HR 68 → 88 by 02:14 (still under 100), RR 16 → 22, wrist skin temp +0.8 °C. She does not get up alone:
+    the drift shows as restlessness in bed (more frequent turning and fidgeting, growing through the night)
+    and two call-light toileting trips with the CNA (a check logged 2 min before each), so the fall-prevention
+    rule never fires and the deep tier (Snowflake anomalies vs her own normal) has to find her. The 21:30
+    CNA note reads as low concern; the confusion is only discovered at 02:20, when an aide goes to check on
+    her because Vigil put her at the top of the queue. No fixed threshold (HR > 100, RR > 24, SpO2 < 90)
+    fires before ~03:50.
     """
 
-    HR_DELTA = [(14, 0), (20, 2), (22, 4), (23 + 40 / 60, 9), (25.5, 20), (26 + 14 / 60, 27), (FIXED_ALARM_CLEAR_UNTIL_H, 34),
+    HR_DELTA = [(14, 0), (20, 2), (22, 5), (23 + 40 / 60, 13), (25.5, 21), (26 + 14 / 60, 27), (FIXED_ALARM_CLEAR_UNTIL_H, 34),
                 (29, 37), (30.5, 38), (32.5, 38), (36, 0)]  # fmt: skip
-    RR_DELTA = [(14, 0), (22, 1), (23 + 40 / 60, 2), (25.5, 4.5), (26 + 14 / 60, 6), (FIXED_ALARM_CLEAR_UNTIL_H, 7.5),
+    RR_DELTA = [(14, 0), (22, 1.5), (23 + 40 / 60, 3), (25.5, 4.75), (26 + 14 / 60, 6), (FIXED_ALARM_CLEAR_UNTIL_H, 7.5),
                 (29, 9), (30.5, 9.5), (32.5, 9.5), (36, 0)]  # fmt: skip
     SKIN_DELTA = [
         (14, 0),
-        (22, 0.3),
-        (23 + 40 / 60, 0.5),
+        (22, 0.35),
+        (23 + 40 / 60, 0.65),
         (26 + 14 / 60, 0.8),
         (28, 1.0),
         (30.5, 1.1),
@@ -574,42 +580,68 @@ class AlvarezDrift(_NightScript):
         (36, 0),
     ]
     SPO2_DELTA = [(14, 0), (25, -1), (27, -2), (30.5, -2.5), (32.5, -2.5), (36, 0)]
-    # Bed exits (start hour, minutes out of bed): 5 tonight against her usual ~1.
-    EXITS = [(22 + 38 / 60, 5), (23 + 31 / 60, 6), (24 + 52 / 60, 7), (25 + 52 / 60, 5), (27 + 51 / 60, 6)]
-    NOTE_2130 = "Rosa is more confused than usual, only drank half her fluids."
+    # Restlessness in bed: turning and fidgeting this many times her usual rate, rising through the night.
+    RESTLESS = [(20, 1.5), (22, 2.5), (23 + 40 / 60, 4.0), (25.5, 6.0), (26 + 14 / 60, 7.0), (31, 7.0)]
+    NIGHT_MOTION = 3.0  # micro-movement while asleep vs her usual
+    # Call-light toileting trips (start hour, minutes out of bed); the CNA is there first.
+    TRIPS = [(22 + 50 / 60, 6), (27 + 10 / 60, 5)]
+    FIDGET_BOOST = 3.0  # × her usual fidget count, on top of the RESTLESS weighting
+    # The 02:00 round reaches her late: her round check is at 02:17, not ~01:40, so no 30-min post-check
+    # suppression sits on her climb before 02:14.
+    ROUND_0200 = 26 + 17 / 60
+    NOTE_2130 = "Rosa was a bit restless at bedtime, only drank half her fluids."
+    NOTE_0220 = "Rosa seems more confused than usual, warm to touch."
 
     def __init__(self, night: date, tz: ZoneInfo):
         super().__init__(17, night, tz, start_h=14)
 
+    def restless(self, epoch: np.ndarray | float) -> np.ndarray | float:
+        return _knots(np.asarray(epoch, dtype=float), self.pts(self.RESTLESS))
+
     def adjust_plan(self, plan: DayPlan, params: PhysioParams, tz: ZoneInfo) -> None:
         if not self.is_night_plan(plan):
             return
-        self.replace_trips(plan, params, [Trip(self.at(h), self.at(h) + m * 60) for h, m in self.EXITS])
-        plan.night_motion = 3.0
+        self.replace_trips(plan, params, [Trip(self.at(h), self.at(h) + m * 60, assisted=True) for h, m in self.TRIPS])
+        plan.night_motion = self.NIGHT_MOTION
         rng = np.random.default_rng([plan.day.toordinal(), 17, 404])
-        cadence = params.turn_cadence_min * 60 / 3  # turning ×3
         s, wake = plan.sleep
-        turns = np.arange(s + cadence / 2, wake, cadence)
-        plan.turns = [float(x) for x in turns + rng.uniform(-300, 300, size=len(turns))]
-        plan.fidgets = sorted(float(x) for x in rng.uniform(s, wake, size=int(9 * params.restless * 3)))
+        # Turning: her usual cadence divided by the restlessness factor at each moment.
+        turns, t = [], s + rng.uniform(0.3, 0.7) * params.turn_cadence_min * 60 / float(self.restless(s))
+        while t < wake:
+            turns.append(float(t))
+            t += params.turn_cadence_min * 60 / float(self.restless(t)) * rng.uniform(0.7, 1.3)
+        plan.turns = turns
+        # Fidgets: her usual count, scaled up, placed more densely as the restlessness rises.
+        grid = np.linspace(s, wake - 60, 400)  # + up to 60 s jitter below: every fidget stays in bed
+        weight = self.restless(grid)
+        n = int(FIDGETS_PER_NIGHT * params.restless * self.FIDGET_BOOST * float(weight.mean()))
+        plan.fidgets = sorted(
+            float(x) for x in rng.choice(grid, size=n, p=weight / weight.sum()) + rng.uniform(0, 60, n)
+        )
         self.drop_routine_notes(plan)
-        mc_eve, mc_night = fac.staff_on_duty("CNA", 21, "Memory Care"), fac.staff_on_duty("CNA", 1, "Memory Care")
+        mc_eve, mc_night = fac.staff_on_duty("CNA", 21, "Memory Care"), fac.staff_on_duty("CNA", 2, "Memory Care")
         rn_night = fac.staff_on_duty("RN", 4)
         kept = []
+        round_0200 = False
         for e in plan.events:
             if e.type == "intake_logged" and e.payload.get("meal") == "dinner":
                 e = e._replace(payload={**e.payload, "meal_pct": 50, "fluid_ml": 120})
             elif e.type == "intake_logged" and e.payload.get("kind") == "fluids" and e.ts < self.at(24):
                 e = e._replace(payload={**e.payload, "fluid_ml": 90})
+            elif e.type == "check_logged" and e.payload.get("round") == "02:00":
+                e = e._replace(ts=self.at(self.ROUND_0200))
+                round_0200 = True
             elif e.type == "spot_check":
                 evening = e.ts < self.at(24)
                 temp, sbp = (37.7, 108) if evening else (38.4, 104)
                 e = e._replace(payload={**e.payload, "temp_c": temp, "sbp": sbp, "dbp": round(sbp * 0.56)})
             kept.append(e)
+        if not round_0200:  # the generator skips a few rounds; hers must happen (it finds the confusion)
+            kept.append(self.event(self.ROUND_0200, "check_logged", mc_night, {"kind": "round", "round": "02:00"}))
         plan.events[:] = kept + [
             self.event(21.5, "note_added", mc_eve, {"text": self.NOTE_2130, "author_role": "CNA", "source": "text"}),
-            self.event(24 + 55 / 60, "check_logged", mc_night,
-                       {"kind": "redirect", "reason": "found walking in the hallway, walked back to bed"}),
+            self.event(26 + 20 / 60, "note_added", mc_night,
+                       {"text": self.NOTE_0220, "author_role": "CNA", "source": "text"}),
             self.event(28 + 5 / 60, "check_logged", rn_night, {"kind": "assessment"}),
             self.event(28 + 6 / 60, "spot_check", rn_night, {"sbp": 102, "dbp": 58, "temp_c": 38.2, "method": "oral"}),
             self.event(28 + 8 / 60, "note_added", rn_night, {
@@ -796,7 +828,7 @@ class QuietNight(Scenario):
 
 
 CAST_SCRIPTS = (AlvarezDrift, LeeFluidOverload, PatelDecline, OrtizFall, WrightBandOff)
-UNASSISTED_TONIGHT = (17, 110)  # Alvarez and Ortiz get up alone on purpose; everyone else is quiet
+UNASSISTED_TONIGHT = (110,)  # only Ortiz gets up alone (his fall); everyone else's trips are call-light assisted
 
 
 def scripted_night(night: date, tz: ZoneInfo) -> dict[int, list[Scenario]]:

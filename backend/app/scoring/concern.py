@@ -29,6 +29,10 @@ _MED = re.compile(
     r"|crackles|vomit|pain|dizz|agitat|not eating",
     re.IGNORECASE,
 )
+# A note whose only findings are restlessness or reduced intake, with the restlessness itself hedged ("a bit
+# restless at bedtime, only drank half her fluids"), is low concern; unhedged, or hedged elsewhere, stays med.
+_HEDGED_RESTLESS = re.compile(r"\b(a bit|a little|slightly|somewhat) restless", re.IGNORECASE)
+_MILD = re.compile(r"restless|drank (only )?half|only drank", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -52,8 +56,10 @@ def keyword_extract(text: str) -> NoteConcern:
     confusion = "worse" if _CONFUSION_WORSE.search(text) else "unknown"
     if _HIGH.search(text):
         level = "high"
-    elif _MED.search(text) or confusion == "worse":
+    elif confusion == "worse":
         level = "med"
+    elif meds := [m.group(0) for m in _MED.finditer(text)]:
+        level = "low" if _HEDGED_RESTLESS.search(text) and all(_MILD.fullmatch(m) for m in meds) else "med"
     else:
         level = "none"
     return NoteConcern(level, confusion, "keyword", text[:120])

@@ -43,6 +43,10 @@ MODELS: dict[str, tuple[str, str]] = {
     "motion": ("AD_MOTION", "MOTION_SUM"),
 }
 EXOGENOUS = "IN_BED_FRAC"
+# Where detection reads each metric from: the rows its model was trained on. Movement is night-time
+# restlessness in bed only, defined once in ML.MOTION_NIGHT_IN_BED (004_models.sql).
+SOURCES = {"motion": "ML.MOTION_NIGHT_IN_BED"}
+DEFAULT_SOURCE = "CORE.VITALS_15M"
 PREDICTION_INTERVAL = 0.99
 Z_INTERVAL = NormalDist().inv_cdf(0.5 + PREDICTION_INTERVAL / 2)  # 2.576: edge of the 99 % interval
 Z_FULL = 5.0  # severity reaches 1 this many σ from the model's forecast
@@ -175,7 +179,7 @@ def detect_sql(metric: str, start: datetime, end: datetime) -> str:
     """CALL …!DETECT_ANOMALIES over buckets in [start, end) for every resident (start includes any lead-in)."""
     model, target = MODELS[metric]
     query = (
-        f"SELECT RESIDENT_ID, BUCKET_TS, {target}, {EXOGENOUS} FROM CORE.VITALS_15M "
+        f"SELECT RESIDENT_ID, BUCKET_TS, {target}, {EXOGENOUS} FROM {SOURCES.get(metric, DEFAULT_SOURCE)} "
         f"WHERE BUCKET_TS >= {_lit(start)} AND BUCKET_TS < {_lit(end)} "
         f"AND {target} IS NOT NULL AND {EXOGENOUS} IS NOT NULL"
     )

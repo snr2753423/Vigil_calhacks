@@ -8,6 +8,7 @@ import pytest
 
 from app.sim import cast
 from app.sim import facility as fac
+from app.sim.physiology import make_day_plan
 
 SEED = 1337
 TZ = fac.tzinfo("America/Los_Angeles")
@@ -144,29 +145,57 @@ def test_alvarez_no_fixed_threshold_before_0350(history) -> None:
     assert np.nanmax(cols["rr"][before]) <= 24
     assert np.nanmin(cols["rr"][before]) >= 10
     assert np.nanmin(cols["spo2"][before]) >= 90
-    # …and the first fixed-threshold alarm (HR > 100) does come shortly after 03:50.
+    # …and the first fixed-threshold alarm (here RR > 24) does come shortly after 03:50.
     after = (ts >= at(27 + 50 / 60)) & (ts < at(28.5))
-    first = ts[after & (cols["hr"] > 100)]
-    assert len(first) and first[0] < at(28 + 5 / 60)
+    first = ts[after & ((cols["hr"] > 100) | (cols["rr"] > 24) | (cols["spo2"] < 90))]
+    assert len(first) and first[0] < at(28 + 20 / 60)
 
 
 def test_alvarez_drift_shape(history) -> None:
-    cols, events, ts = history[17]
+    cols, _, ts = history[17]
     assert window_mean(cols, ts, "rr", 26 + 14 / 60, 7.5) >= 20.5  # RR 16 → ~22
     skin_now = window_mean(cols, ts, "skin_temp", 26 + 14 / 60, 15)
     skin_prior = float(np.nanmean(cols["skin_temp"][(ts >= at(2)) & (ts < at(2.5))]))  # same time, night before
     assert 0.5 <= skin_now - skin_prior <= 1.1  # ≈ +0.8 °C
-    night = (ts >= at(22)) & (ts < at(30.5))
-    exits = [e for e in events if e.type == "bed_exit" and at(22) <= e.ts < at(30.5)]
-    assert len(exits) == 5
-    prior_exits = [e for e in events if e.type == "bed_exit" and at(22 - 24) <= e.ts < at(30.5 - 24)]
-    assert len(prior_exits) <= 2
-    motion_tonight = np.nanmean(cols["motion"][night & (cols["in_bed"] == 1)])
-    prior = (ts >= at(22 - 24)) & (ts < at(30.5 - 24)) & (cols["in_bed"] == 1)
-    assert motion_tonight > 2 * np.nanmean(cols["motion"][prior])  # restless (×3 movement)
-    note = [e for e in events if e.type == "note_added" and abs(e.ts - at(21.5)) < 1]
-    assert note and "more confused than usual, only drank half her fluids" in note[0].payload["text"]
-    assert note[0].payload["author_role"] == "CNA"
+
+
+def test_alvarez_restless_in_bed_and_rising(history) -> None:
+    cols, _, ts = history[17]
+    in_bed = cols["in_bed"] == 1
+
+    def motion(h0, h1, back=0):
+        sel = (ts >= at(h0 - back)) & (ts < at(h1 - back)) & in_bed
+        return float(np.nanmean(cols["motion"][sel])), float(np.nanmean(cols["bed_motion"][sel]))
+
+    early, early_bed = motion(22.5, 23.5)
+    late, late_bed = motion(25.5, 26.5)
+    prior, prior_bed = motion(25.5, 26.5, back=24)  # same hours, the night before
+    assert late > 3 * prior and late_bed > 4 * prior_bed  # restless vs her own normal
+    assert late > 1.3 * early  # and getting worse through the night
+
+
+def test_alvarez_never_gets_up_alone(history) -> None:
+    _, events, _ = history[17]
+    exits = [e for e in events if e.type == "bed_exit" and at(20) <= e.ts < at(30.5)]
+    assert len(exits) == 2
+    checks = [e.ts for e in events if e.type == "check_logged"]
+    for ex in exits:  # a CNA check within 2 min before each exit: the fall-prevention rule stays quiet
+        assert any(0 <= ex.ts - c <= 125 for c in checks), ex
+
+
+def test_alvarez_notes_low_concern_then_confusion_found_at_0220(history) -> None:
+    _, events, _ = history[17]
+    notes = sorted((e for e in events if e.type == "note_added" and at(20) <= e.ts < at(28)), key=lambda e: e.ts)
+    assert [round((n.ts - at(0)) / 3600, 2) for n in notes] == [21.5, round(26 + 20 / 60, 2)]
+    assert notes[0].payload["text"] == "Rosa was a bit restless at bedtime, only drank half her fluids."
+    assert "confus" not in notes[0].payload["text"]
+    assert notes[1].payload["text"] == "Rosa seems more confused than usual, warm to touch."
+    assert all(n.payload["author_role"] == "CNA" for n in notes)
+    check = [e for e in events if e.type == "check_logged" and 0 < notes[1].ts - e.ts <= 300]
+    assert check and check[0].ts > at(26 + 14 / 60)  # the aide gets to her after 02:14
+    assert check[0].payload.get("round") == "02:00"  # her (late) 02:00 round, no claim about the queue
+    # and no check between 23:45 and 02:14: nothing suppresses her climb before the bookmark
+    assert not [e for e in events if e.type == "check_logged" and at(23.75) < e.ts < at(26 + 14 / 60)]
 
 
 # --------------------------------------------------------------------------- the rest of the cast
@@ -223,10 +252,10 @@ def test_kim_and_rossi_stay_in_their_personal_ranges(history) -> None:
 
 
 def test_quiet_night_for_everyone_else(roster) -> None:
-    """Except Alvarez and Ortiz, last night's bathroom trips are call-light assisted (a check right before),
-    including cast members without a trip script such as Grant (R-120, Morse 70)."""
+    """Except Ortiz, last night's bathroom trips are call-light assisted (a check right before), including
+    cast members without a trip script such as Grant (R-120, Morse 70)."""
     sims = cast.build_sims(SEED, TZ, roster, NIGHT)
-    for rid in (5, 20, 60, 100, 120, 42):
+    for rid in (5, 20, 60, 100, 120, 42, 17):
         plan = sims[rid].plan(NIGHT.toordinal() - date(1970, 1, 1).toordinal())
         assert all(trip.assisted for trip in plan.trips)
         assists = [e for e in plan.events if e.payload.get("reason") == cast.BATHROOM]
@@ -243,3 +272,13 @@ def test_bookmarks_are_in_the_scripted_night() -> None:
         assert window["night_start"] <= t < window["night_end"]
     local = datetime.fromisoformat(marks[2]["ts"]).astimezone(TZ)
     assert (local.hour, local.minute) == (2, 14)
+
+
+def test_alvarez_0200_round_happens_even_if_the_generator_skipped_it(roster) -> None:
+    alvarez = next(r for r in roster if r.resident_id == 17)
+    params = cast.resident_params(SEED, alvarez)
+    plan = make_day_plan(params, NIGHT, SEED, TZ)
+    plan.events[:] = [e for e in plan.events if e.payload.get("round") != "02:00"]  # a skipped round
+    cast.AlvarezDrift(NIGHT, TZ).adjust_plan(plan, params, TZ)
+    rounds = [e for e in plan.events if e.payload.get("round") == "02:00"]
+    assert len(rounds) == 1 and rounds[0].ts == at(cast.AlvarezDrift.ROUND_0200)

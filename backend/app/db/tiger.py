@@ -26,6 +26,10 @@ from app.config import BACKEND_DIR, get_settings
 from app.scoring.rules import FALL_IMPACT_G
 
 CONNECT_TIMEOUT_S = 10
+# TCP keepalives: something on the network path to Tiger Cloud drops connections that stay quiet for minutes
+# (the server itself has no idle timeout). A connection held across a long Snowflake call (training,
+# detection) then fails on its next query. Probing every 30 s keeps it open.
+KEEPALIVE = {"keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10, "keepalives_count": 5}
 MIGRATIONS_DIR = BACKEND_DIR / "sql" / "tiger"
 ANOMALY_LOOKBACK_MIN = 45  # Snowflake anomaly results older than this are stale for scoring (Tiger z instead)
 
@@ -51,7 +55,7 @@ async def connect(url: str | None = None, application_name: str = "vigil") -> As
     if not url:
         raise TigerNotConfigured("TIGER_DATABASE_URL is not set in .env")
     conn = await psycopg.AsyncConnection.connect(
-        url, autocommit=True, connect_timeout=CONNECT_TIMEOUT_S, application_name=application_name
+        url, autocommit=True, connect_timeout=CONNECT_TIMEOUT_S, application_name=application_name, **KEEPALIVE
     )
     try:
         yield conn
@@ -381,7 +385,12 @@ async def open_pool(min_size: int = 1, max_size: int = 6) -> AsyncConnectionPool
             url,
             min_size=min_size,
             max_size=max_size,
-            kwargs={"autocommit": True, "connect_timeout": CONNECT_TIMEOUT_S, "application_name": "vigil-api"},
+            kwargs={
+                "autocommit": True,
+                "connect_timeout": CONNECT_TIMEOUT_S,
+                "application_name": "vigil-api",
+                **KEEPALIVE,
+            },
             open=False,
         )
         await pool.open(wait=False)

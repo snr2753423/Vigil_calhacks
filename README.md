@@ -90,7 +90,7 @@ The layout follows SPEC §5. `backend/app/` holds `api/`, `ws/`, `db/` (`tiger.p
 
 ## Status
 
-**Phase 5 (Snowflake core: sync + anomaly detection): built; acceptance partly met (see Known issues)**
+**Phase 5 (Snowflake core: sync + anomaly detection): done**
 
 What works:
 - **Snowflake tables** (`backend/sql/snowflake/002_tables.sql`, `make migrate-sf`, idempotent).
@@ -106,6 +106,7 @@ What works:
 - **Anomaly models** (`sql/snowflake/004_models.sql`, `make train`):
   - 5 multi-series `SNOWFLAKE.ML.ANOMALY_DETECTION` models: `ML.AD_HR` (HR_AVG), `AD_RR` (RR_AVG), `AD_SPO2` (SPO2_MIN), `AD_SKIN_TEMP` (SKIN_TEMP_AVG), `AD_MOTION` (MOTION_SUM).
   - Each has `SERIES_COLNAME = RESIDENT_ID`, `TIMESTAMP_COLNAME = BUCKET_TS`, exogenous `IN_BED_FRAC`, and is unsupervised.
+  - **Movement is night-time restlessness in bed only** (in bed ≥ 90 % of the bucket, 23:00–06:59 facility time), in training and in detection (`anomaly.ROW_FILTERS`). Over a whole day a resident's movement runs from ~40 counts / 15 min asleep to thousands walking. Each model has one error width per resident, so the all-day night band was about ±1,600 counts and no in-bed restlessness could fall outside it. This narrows SPEC §9 ② (which only names the target and `IN_BED_FRAC`).
   - The training window lives in `ML.TRAINING_WINDOW`: up to `ANOMALY_TRAIN_DAYS` (default 12) days ending at last night's holdout start, clamped to the seeded history. The five train in parallel and each one's time is printed. Optional `SNOWFLAKE_TRAIN_WAREHOUSE` trains on a bigger warehouse.
   - Training metadata goes to Tiger `sim_meta.anomaly_models`, tied to the seed. A re-seed invalidates the models until `make train` runs again.
 - **Detection** (`app/deep/anomaly.py`):
@@ -121,27 +122,46 @@ What works:
   - HR, RR, SpO₂ and skin temp get the model's expected range (dashed edges, light fill). Every flagged bucket gets an amber ◆ on the line: HR, RR, SpO₂, skin temp and movement.
   - Data comes from `GET /api/insights/{id}?kind=anomaly&from&to`, read from the Tiger cache; the charts never wait on Snowflake.
 - **`GET /api/stats/snowflake`**: calls / errors / avg ms per feature (`connect`, `sync.*`, `bulk.*`, `anomaly.detect.<metric>`, `anomaly.store`, `anomaly.train.*`, …), the sync and detection state, watermarks, cumulative rows, the model metadata and ai_insights counts. `/api/health` adds `deep`.
-- **Tests**: backend **245** passed (severity mapping, PERCENTILE/DISTANCE z, detection lead-in, result parsing and payloads, the SQL, P_anom from Snowflake vs the fallback, multi-signal, factor text, sync frames and cutoffs). Frontend **21** passed (expected band at 1m/1h and the dots). `make lint` is clean.
+- **Tests**: backend **253** passed (severity mapping, PERCENTILE/DISTANCE z, detection lead-in, the night in-bed motion filter, result parsing and payloads, the SQL, P_anom from Snowflake vs the fallback, multi-signal, factor text, sync frames and cutoffs). Frontend **21** passed (expected band at 1m/1h and the dots). `make lint` is clean.
 
-Verified against the real accounts (3-day seed):
-- **`make train`**: window 13 Oct 19:30 → 15 Oct 19:00 UTC (2.0 days). Training took 1081–1151 s per model on XSMALL, all five in parallel, 19 min in total. Detection over the following 30 h (62,332 results) took 237 s.
+Alvarez scenario (SPEC §8, updated):
+- She never gets up alone. Restlessness in bed grows from ~4–5× her normal at 22:00 to ~6–7× by 02:00. She makes 2 call-light toileting trips (22:50, 03:10), each with a CNA check 2 min before, so the fall-prevention rule never fires.
+- Her early-evening drift is a little stronger than in the first Phase 5 version: at 23:40, HR +13, RR +3, skin temp +0.65 °C. Her 02:14 values are unchanged.
+- The 21:30 note ("a bit restless at bedtime, only drank half her fluids") is low concern with no confusion wording. The keyword fallback scores a hedged note whose only findings are restlessness or reduced intake as low; unhedged wording stays med.
+- Her 02:00 round reaches her late, at 02:17, so no post-check suppression sits on her climb. The 02:20 CNA note "seems more confused than usual, warm to touch" adds the confusion.
+- No vital-sign fixed threshold fires before ~03:50 (first: RR > 24 at ~04:04). Max HR before 03:50 is 99 bpm.
+
+Verified against the real accounts (10-day seed, `make seed DAYS=10`, 11 min including the Snowflake bulk load of 115k buckets):
+- **`make train`** on `VIGIL_ML_WH` (MEDIUM, auto-suspend 60): window 7 Oct 17:15 → 16 Oct 19:00 UTC (9.1 days). Per model: SpO₂ 3607 s, motion 3645 s (31k rows), skin temp 3936 s, RR 4009 s, HR 4024 s, so 67.2 min in total for the five in parallel. The earlier 8.5–8.6-day runs took 67–70 min. MEDIUM barely helps, so training cost grows with history: 2 days on XSMALL took 19 min.
+- **Detection** from the end of training to now (25 h, 44,055 results) took 272 s.
 - **Last night** (`make detect`):
-  - Alvarez is flagged on **HR from 23:30, RR from 22:00, skin temp from 23:00**, all before 02:14. **Motion is not flagged** (see below).
-  - Rossi: one SpO₂ flag (a real simulated dip, 92 % vs 95 % expected). Kim: 11 low-severity flags (HR below expected, skin temp).
-  - In the gated replay, Kim briefly reaches WATCH twice (36–40) and Rossi once (38). Neither reaches HIGH.
-  - Every resident outside the cast: ~3 % of resident-buckets flagged, against 1 % expected for a 99 % interval.
-- **Live**: buckets sync ~5 min after they close. Detection of one new bucket takes ~100–230 s, so results land ~8–10 min after the bucket.
+  - **Alvarez is flagged on HR and RR from 22:15 (30 and 31 buckets) and night movement from 23:00 (6 buckets)**, all before 02:14. Skin temp and SpO₂ are flagged later (02:15, 02:30).
+  - Kim: 3 low-severity flags (≤ 0.23). Rossi: 1 movement flag at severity 0.09.
+  - Outside the cast: 253 flags over ~3,900 resident-buckets × 5 metrics, ~1.3 %. On the 2-day models it was ~3 %.
+- **Gated replay** (the real evaluator and alert gate, 2-min steps, Snowflake severities all evening):
+
+  | Time | Alvarez | Driven by |
+  |---|---|---|
+  | 23:12–23:40 | WATCH 44–51, #1 | "HR 77 (her expected 56–69)", RR vs expected |
+  | 00:32 | WATCH 56, multi-signal | "Restless: movement 3× her expected", RR, HR |
+  | 00:42–00:50 | HIGH 61, #1 | brief: an SpO₂ dip adds NEWS2 points |
+  | 01:34 | **HIGH 60, #1** | movement 2× expected, RR, overdue check |
+  | 02:14 | **HIGH 63, #1** | RR 21 (her expected 17–19), HR 84 (her expected 67–79) |
+  | 02:20 → 02:42 | WATCH 72 → CRITICAL 84 | the late 02:17 round check holds her at WATCH, then the 02:20 confusion note |
+
+  - Before 02:20 her score never includes a confusion note or a bed-exit rule.
+  - Earlier in the evening she is briefly WATCH twice: 21:02–21:26 (RR above expected, overdue round) and 22:26–22:48 (36, borderline).
+  - Kim and Rossi stay STABLE all night. Lee is HIGH from ~00:34 but below Alvarez at 02:14.
+- **Resident page** (`/resident/17`, 24 h): ◆ dots on HR, RR, SpO₂, skin temp and night-time movement. "Why this score" shows "Snowflake anomaly detection · known HH:MM".
+- **Live**: buckets sync ~5 min after they close. Detection of one new bucket takes ~100–330 s, so results land ~8–10 min after the bucket.
 - **Without Snowflake**: with `SNOWFLAKE_ACCOUNT`/`USER` blank, the app runs (sync `disabled`, queue/resident/insights all 200) and scores from the Tiger z fallback wherever no fresh result exists. With an unreachable account, the sync loop logs, backs off and retries; the event loop is unaffected.
-- **Alvarez HR** last night: max 98 bpm before 03:50; the first reading > 100 is at 03:51:40 (SPEC §8 holds).
 
 Known issues:
-- **2 days of training is too little.** The models don't learn the time-of-day pattern from two nights. Alvarez's in-bed night movement is forecast at ~700–1400 counts with an interval of −900…2500, while her real nights have a median of 37, so her 3× restlessness is invisible. Kim's night HR is expected near her daytime HR, which causes the false flags. Re-seed with `make seed DAYS=14` (12-day window) and retrain.
-- **Training time** scales with history. 2 days took 19 min on XSMALL, so 12 days may take well over an hour. Use `SNOWFLAKE_TRAIN_WAREHOUSE` (MEDIUM or larger) for `make train`.
-- **The Alvarez bookmarks (WATCH 23:40 → HIGH 01:30 → #1 02:14) do not hold, with or without Snowflake.** Two SPEC floors fire first:
-  - The 21:30 "more confused than usual" note makes NEWS2 consciousness 3, which forces HIGH from 21:32.
-  - Each of her 4 unassisted night bed exits (Morse 55, 1-assist) is fall prevention = 90, i.e. CRITICAL at 22:38, 23:31, 01:52 and 03:51.
-
-  Snowflake only moves the ≤ 25-point anomaly term. Results: 23:40 CRITICAL (bed exit held), 01:30 CRITICAL 81, 02:14 HIGH 79 at #1. Her brief WATCH dips are the 30-min suppression after logged checks. A scenario or spec change is needed (not weights); this is open with the human.
+- **Bookmark timing**: HIGH comes at 01:34, not 01:30. The score is 60 at 01:30, and persistence needs 2 cycles. She also dips to WATCH between 00:56 and 01:34, when an SpO₂ dip ends and the multi-signal +10 drops off.
+- **Model forecasts follow recent buckets**, so a slow, steady drift is partly absorbed. Her movement flags are strongest 23:00–00:45; HR and RR carry the later part.
+- **After her scripted recovery** (drift ends at noon), live detection can flag her HR as *low* vs expected for a while. That shows as ◆ below the band on the next day's chart. Harmless to the score.
+- **Training is slow**: ~67 min for 9 days on MEDIUM. Train well before a demo. `make detect` alone takes ~5 min, and `make train --no-train` re-registers models already in Snowflake (e.g. after a lost connection) and detects without retraining.
+- **Tiger connections dropped while idle**: something on the network path closes quiet connections (the server has no idle timeout). All Tiger connections now send TCP keepalives every 30 s, and `make train` holds no Tiger connection while it trains.
 - A detection run happens inside the sync loop, so the 1-min sync pauses for its ~2–4 min once per bucket.
 - Rows synced and call counts in `/api/stats/snowflake` are per backend process. Cumulative rows come from `sync_state`; training is done by `make train`, so its call counts appear only in that process's output and in `sim_meta`.
 
