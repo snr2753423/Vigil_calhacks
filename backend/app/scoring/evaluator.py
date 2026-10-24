@@ -33,7 +33,7 @@ import psycopg
 from app.config import Settings, get_settings
 from app.db import tiger
 from app.deep import assess, forecast
-from app.scoring import priority
+from app.scoring import plain, priority
 from app.scoring.baseline import Baselines
 from app.scoring.features import Profile, ResidentFeatures, build_features
 from app.scoring.priority import TIER_ENTER, TIER_RANK, TIERS, PriorityResult, Tier, tier_for_score
@@ -284,6 +284,12 @@ class QueueItem:
     def sort_key(self) -> tuple:
         return (-TIER_RANK[self.tier], -self.decision.score, self.profile.resident_id)
 
+    def plain_reason(self) -> str:
+        return plain.plain_reason(self.profile, self.features, self.result, self.clock, self.decision.rule)
+
+    def task(self) -> str | None:
+        return plain.plain_task(self.profile, self.result.device, self.features.as_of)
+
     def to_dict(self, rank: int, *, detail: bool = True) -> dict:
         """The REST queue card. detail=False leaves out the score breakdown (components, NEWS2, note concern).
         /ws/live sends the smaller `to_wire` card instead."""
@@ -302,6 +308,8 @@ class QueueItem:
             "rule": (d.rule.to_dict() | {"held": d.rule_held, "acknowledged": d.rule_acknowledged}) if d.rule else None,
             "device": r.device.to_dict() if r.device else None,
             "factors": [x.to_dict() for x in r.factors],
+            "plain_reason": self.plain_reason(),
+            "task": self.task(),
             "suppressed_until": _iso(d.suppressed_until),
             "last_check_ts": _iso(f.last_check_ts),
             "minutes_since_check": None if c.minutes_since_check is None else round(c.minutes_since_check, 1),
@@ -348,6 +356,8 @@ class QueueItem:
             },  # fmt: skip
             "device": r.device.text if r.device else None,
             "factors": [{"text": x.text, "kind": x.kind} for x in r.factors[: 3 if d.tier != "STABLE" else 1]],
+            "plain_reason": self.plain_reason(),
+            "task": self.task(),
             "last_check": _iso_s(f.last_check_ts),
             "check_min": None if msc is None else round(msc),
             "suppressed": d.suppressed_until is not None,
@@ -495,7 +505,8 @@ def alert_message(as_of: datetime, it: QueueItem) -> dict:
         "type": "alert", "ts": as_of.isoformat(), "resident_id": p.resident_id, "name": p.name, "room": p.room,
         "unit": p.unit, "tier": d.tier, "from_tier": d.prev_tier, "score": d.score,
         "rule": d.rule.to_dict() if d.rule else None, "new_rules": list(d.new_rules),
-        "factors": [x.text for x in it.result.factors], "sound": d.tier == "CRITICAL",
+        "factors": [x.text for x in it.result.factors], "plain_reason": it.plain_reason(),
+        "sound": d.tier == "CRITICAL",
     }  # fmt: skip
 
 

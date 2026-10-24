@@ -5,7 +5,7 @@ export function Stat({ label, value, mono = false }: { label: string; value: str
   return (
     <div>
       <dt className={cn("text-muted-foreground", mono ? "text-xs uppercase tracking-wide" : "text-sm")}>{label}</dt>
-      <dd className={mono ? "font-mono text-xl whitespace-nowrap tabular-nums" : undefined}>{value}</dd>
+      <dd className={mono ? "text-xl whitespace-nowrap tabular-nums" : undefined}>{value}</dd>
     </div>
   );
 }

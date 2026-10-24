@@ -1,11 +1,11 @@
 "use client";
 
-import { Check, ClipboardCheck, Loader2 } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "cn";
 
 import { postJSON } from "@/lib/api";
-import { facilityHHMM } from "@/lib/format";
+import { facilityClock12, firstName } from "@/lib/format";
 import { useLiveStore } from "@/store/live";
 
 const KINDS = [
@@ -17,7 +17,8 @@ const KINDS = [
 
 type Props = { residentId: number; name: string; onLogged?: () => void; compact?: boolean };
 
-/** "Mark checked" quick form → POST /api/checks (quiets the card for 30 min unless things get worse). */
+/** "I checked on Rosa" → POST /api/checks (quiets the card for 30 min unless things get worse). `compact`: the
+ *  big button first, the short form after a tap; otherwise the form is open. */
 export function MarkCheckedForm({ residentId, name, onLogged, compact = false }: Props) {
   const [open, setOpen] = useState(!compact);
   const [kind, setKind] = useState<string>("bedside");
@@ -26,6 +27,7 @@ export function MarkCheckedForm({ residentId, name, onLogged, compact = false }:
   const [doneAt, setDoneAt] = useState<number | null>(null);
   const [error, setError] = useState("");
   const replay = useLiveStore((s) => s.sim?.mode === "replay");
+  const first = firstName(name);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,47 +49,50 @@ export function MarkCheckedForm({ residentId, name, onLogged, compact = false }:
     }
   };
 
+  const logged = state === "done" && doneAt !== null && (
+    <span className="flex items-center gap-1.5 text-base text-stable" role="status">
+      <Check className="size-5" aria-hidden /> Logged at {facilityClock12(doneAt)}
+    </span>
+  );
+
   if (replay) {
     return (
-      <span className="flex h-12 items-center gap-2 rounded-xl px-3 text-sm text-muted-foreground ring-1 ring-white/10">
-        <ClipboardCheck className="size-5" aria-hidden /> Checks are logged in live mode (replay is read-only)
-      </span>
+      <button type="button" disabled className="vg-btn-primary" title="Replay is read-only: checks are logged in live mode">
+        I checked on {first}
+        <span className="sr-only"> (replay is read-only)</span>
+      </button>
     );
   }
 
   if (!open) {
     return (
-      <div className="flex items-center gap-2">
+      <>
         <button
           type="button"
           onClick={() => {
             setOpen(true);
             setState("idle");
           }}
-          className="flex h-12 items-center gap-2 rounded-xl bg-teal-500/15 px-4 text-base font-semibold text-teal-100 ring-1 ring-teal-400/40 hover:bg-teal-500/25"
+          className="vg-btn-primary"
         >
-          <ClipboardCheck className="size-5" aria-hidden /> Mark checked
+          I checked on {first}
         </button>
-        {state === "done" && doneAt !== null && (
-          <span className="flex items-center gap-1 text-sm text-emerald-200" role="status">
-            <Check className="size-4" aria-hidden /> Logged {facilityHHMM(doneAt)}
-          </span>
-        )}
-      </div>
+        {logged}
+      </>
     );
   }
 
   return (
-    <form onSubmit={submit} className="w-full space-y-3 rounded-xl bg-white/[0.04] p-3 ring-1 ring-white/10">
+    <form onSubmit={submit} className="w-full space-y-3 rounded-[14px] bg-surface-2 p-4">
       <fieldset>
-        <legend className="mb-2 text-sm text-muted-foreground">Check for {name}</legend>
+        <legend className="mb-2 text-base text-muted-foreground">What did you do for {first}?</legend>
         <div className="flex flex-wrap gap-2">
           {KINDS.map((k) => (
             <label
               key={k.value}
               className={cn(
-                "flex h-11 cursor-pointer items-center rounded-lg px-3 text-base ring-1",
-                kind === k.value ? "bg-teal-500/25 text-teal-50 ring-teal-300/60" : "ring-white/15 hover:bg-white/5",
+                "flex min-h-11 cursor-pointer items-center rounded-[10px] border px-3 text-base",
+                kind === k.value ? "border-accent bg-surface font-bold" : "border-line bg-surface hover:border-soft-line",
               )}
             >
               <input
@@ -110,34 +115,22 @@ export function MarkCheckedForm({ residentId, name, onLogged, compact = false }:
           onChange={(e) => setNote(e.target.value)}
           maxLength={2000}
           placeholder="Optional: what you saw"
-          className="h-11 w-full rounded-lg border border-input bg-background/60 px-3 text-base"
+          className="vg-input"
         />
       </label>
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="submit"
-          disabled={state === "saving"}
-          className="flex h-12 items-center gap-2 rounded-xl bg-teal-400 px-5 text-base font-semibold text-teal-950 hover:bg-teal-300 disabled:opacity-60"
-        >
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="submit" disabled={state === "saving"} className="vg-btn-primary">
           {state === "saving" ? <Loader2 className="size-5 animate-spin" aria-hidden /> : <Check className="size-5" aria-hidden />}
           Log check
         </button>
         {compact && (
-          <button
-            type="button"
-            onClick={() => setOpen(false)}
-            className="h-12 rounded-xl px-4 text-base text-muted-foreground hover:bg-white/5"
-          >
+          <button type="button" onClick={() => setOpen(false)} className="vg-btn-secondary">
             Cancel
           </button>
         )}
-        {state === "done" && doneAt !== null && (
-          <span className="flex items-center gap-1 text-sm text-emerald-200" role="status">
-            <Check className="size-4" aria-hidden /> Logged {facilityHHMM(doneAt)}
-          </span>
-        )}
+        {logged}
         {state === "error" && (
-          <span className="text-sm text-red-200" role="alert">
+          <span className="text-base text-crit" role="alert">
             {error}
           </span>
         )}

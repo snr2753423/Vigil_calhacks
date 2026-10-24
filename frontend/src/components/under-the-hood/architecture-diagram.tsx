@@ -26,7 +26,7 @@ export function ArchitectureDiagram() {
         {/* sources */}
         <g>
           <rect x="10" y="40" width="170" height="200" rx="14" className={box} />
-          <text x="95" y="68" textAnchor="middle" fontSize="15" fontWeight="600" fill="currentColor">Sources</text>
+          <text x="95" y="68" textAnchor="middle" fontSize="15" fontWeight="700" fill="currentColor">Sources</text>
           {["Simulator · 119 residents", "Polar band (Web BT)", "iPhone bed sensor"].map((t, i) => (
             <text key={t} x="95" y={102 + i * 38} textAnchor="middle" fontSize="13" fill="currentColor" opacity="0.8">{t}</text>
           ))}
@@ -36,8 +36,8 @@ export function ArchitectureDiagram() {
 
         {/* fast tier */}
         <g>
-          <rect x="240" y="20" width="330" height="240" rx="16" className="fill-teal-400/[0.07] stroke-teal-300/60" strokeWidth="1.5" />
-          <text x="405" y="48" textAnchor="middle" fontSize="16" fontWeight="700" className="fill-teal-200">Fast tier · Tiger Data · seconds</text>
+          <rect x="240" y="20" width="330" height="240" rx="16" className="fill-accent/[0.08] stroke-accent/60" strokeWidth="1.5" />
+          <text x="405" y="48" textAnchor="middle" fontSize="16" fontWeight="700" className="fill-accent">Fast tier · Tiger Data · seconds</text>
           <text x="405" y="70" textAnchor="middle" fontSize="12" fill="currentColor" opacity="0.7">“what is happening now and how it is trending”</text>
           {[
             "vitals hypertable · columnstore",
@@ -56,7 +56,7 @@ export function ArchitectureDiagram() {
         {/* UI */}
         <line x1="405" y1="262" x2="405" y2="300" stroke="currentColor" strokeOpacity="0.5" strokeWidth="2" markerEnd="url(#arr)" />
         <rect x="285" y="302" width="240" height="44" rx="12" className={box} />
-        <text x="405" y="322" textAnchor="middle" fontSize="14" fontWeight="600" fill="currentColor">Rounds Queue · WS /ws/live</text>
+        <text x="405" y="322" textAnchor="middle" fontSize="14" fontWeight="700" fill="currentColor">Rounds Queue · WS /ws/live</text>
         <text x="405" y="339" textAnchor="middle" fontSize="12" fill="currentColor" opacity="0.7">who to check next, and why</text>
 
         {/* sync + results */}
@@ -67,8 +67,8 @@ export function ArchitectureDiagram() {
 
         {/* deep tier */}
         <g>
-          <rect x="638" y="20" width="312" height="240" rx="16" className="fill-indigo-400/[0.08] stroke-indigo-300/60" strokeWidth="1.5" />
-          <text x="794" y="48" textAnchor="middle" fontSize="16" fontWeight="700" className="fill-indigo-200">Deep tier · Snowflake · minutes</text>
+          <rect x="638" y="20" width="312" height="240" rx="16" className="fill-stable-solid/[0.1] stroke-stable-solid/60" strokeWidth="1.5" />
+          <text x="794" y="48" textAnchor="middle" fontSize="16" fontWeight="700" className="fill-stable">Deep tier · Snowflake · minutes</text>
           <text x="794" y="70" textAnchor="middle" fontSize="12" fill="currentColor" opacity="0.7">“what it means, what next, what to do”</text>
           {[
             "ML.ANOMALY_DETECTION · 5 models × 120",

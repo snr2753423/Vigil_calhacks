@@ -28,9 +28,9 @@ export function HeartbeatPanel() {
         <CardTitle className="flex items-center gap-2 text-lg">
           <span className="relative flex size-3" aria-hidden>
             {fresh && (
-              <span className="absolute inline-flex size-full animate-ping rounded-full bg-teal-400 opacity-75" />
+              <span className="absolute inline-flex size-full animate-ping rounded-full bg-accent opacity-75" />
             )}
-            <span className={`relative inline-flex size-3 rounded-full ${fresh ? "bg-teal-400" : "bg-zinc-600"}`} />
+            <span className={`relative inline-flex size-3 rounded-full ${fresh ? "bg-accent" : "bg-surface-2"}`} />
           </span>
           Live link · /ws/live
         </CardTitle>

@@ -1,13 +1,12 @@
 "use client";
 
-import { Rewind } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 
 import { BookmarkButtons, PlaybackButtons } from "@/components/replay/replay-controls";
 import { useClock } from "@/hooks/use-clock";
 import { useReplayStatus } from "@/hooks/use-replay-status";
-import { formatFacilityClock } from "@/lib/facility";
+import { facilityClock12 } from "@/lib/format";
 import { replayProgress } from "@/lib/replay";
 import { useLiveStore } from "@/store/live";
 
@@ -24,52 +23,36 @@ export function ReplayBanner() {
   const pct = Math.round(replayProgress(brief, cursor) * 1000) / 10;
 
   return (
-    <div className="print-hide border-b border-violet-400/30 bg-violet-950/60" role="region" aria-label="Replay">
-      <div className="mx-auto flex max-w-[96rem] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2">
-        <p className="flex min-w-0 items-center gap-2 text-base text-violet-50">
-          <Rewind className="size-5 shrink-0 text-violet-200" aria-hidden />
-          <span>
-            <strong className="font-semibold">Replaying last night&apos;s recorded data through the live pipeline.</strong>{" "}
-            <span className="text-violet-200/80">
-              {brief.playing ? `${brief.speed}×` : "Paused"} · Snowflake results and AI cards were prepared ahead
-            </span>
-          </span>
-        </p>
-        <div className="flex items-center gap-2">
-          <time className="font-mono text-lg tabular-nums text-violet-50" suppressHydrationWarning>
-            {formatFacilityClock(cursor)}
+    <div className="print-hide mx-auto w-full max-w-[80rem] px-4 sm:px-6" role="region" aria-label="Replay">
+      <div className="mt-3.5 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-surface-2 px-4 py-2.5 text-muted-foreground">
+        <p className="min-w-0">
+          <strong className="font-bold text-foreground">Replaying last night</strong> through the live system ·{" "}
+          {brief.playing ? `playing at ${brief.speed}×, now ` : "paused at "}
+          <time className="text-foreground" suppressHydrationWarning>
+            {facilityClock12(cursor)}
           </time>
-          <div
-            className="h-2 w-28 overflow-hidden rounded-full bg-white/10 sm:w-40"
-            role="progressbar"
-            aria-label="Position in the night"
-            aria-valuenow={pct}
-            aria-valuemin={0}
-            aria-valuemax={100}
-          >
-            <div className="h-full bg-violet-300" style={{ width: `${pct}%` }} />
-          </div>
-        </div>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <span className="sr-only"> ({pct}% through the night)</span>
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
           <PlaybackButtons compact onResult={(r) => setMsg(r.ok ? null : r)} />
           {status && status.bookmarks.length > 0 && (
-            <button
-              type="button"
-              aria-expanded={marks}
-              onClick={() => setMarks(!marks)}
-              className="h-10 rounded-xl px-3 text-sm font-semibold text-violet-100 ring-1 ring-violet-300/40 hover:bg-white/5"
-            >
+            <button type="button" aria-expanded={marks} onClick={() => setMarks(!marks)} className="vg-chip">
               Bookmarks
             </button>
           )}
         </div>
-        {msg && <p className="w-full text-sm text-red-200" role="alert">{msg.text}</p>}
+        {msg && (
+          <p className="w-full text-sm text-crit" role="alert">
+            {msg.text}
+          </p>
+        )}
         {marks && status && (
           <div className="w-full pb-1">
             <BookmarkButtons bookmarks={status.bookmarks} cursor={Date.parse(brief.cursor)} onResult={(r) => setMsg(r.ok ? null : r)} />
           </div>
         )}
       </div>
+      <p className="sr-only">Snowflake results and AI cards for the replay were prepared ahead.</p>
     </div>
   );
 }

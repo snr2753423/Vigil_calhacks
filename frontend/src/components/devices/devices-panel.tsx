@@ -15,7 +15,7 @@ import { bluetooth, usePolar, type PolarStatus } from "@/store/polar";
 const POLL_MS = 3000;
 
 /** Live hardware (SPEC §11.5): the Polar band over Web Bluetooth, the iPhone bed sensor's QR code, and the
- *  device list. */
+ * device list. */
 export function DevicesPanel() {
   const [info, setInfo] = useState<DevicesResponse | null>(null);
 
@@ -41,16 +41,16 @@ export function DevicesPanel() {
   const who = resident ? `R-${rid} · ${resident.name} (room ${resident.room})` : `R-${rid}`;
 
   return (
-    <main className="mx-auto w-full max-w-6xl flex-1 space-y-4 px-3 py-4 sm:px-4">
+    <main className="mx-auto w-full max-w-[80rem] flex-1 space-y-4 px-4 pt-6 pb-16 sm:px-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Devices · live hardware</h1>
+        <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Devices · live hardware</h1>
         <p className="text-base text-muted-foreground">
           The presenter is {who}: a Polar Verity Sense on the wrist and an iPhone under the pillow stream into Tiger
           every second.
         </p>
       </div>
       {info?.simulated_band && (
-        <p role="alert" className="flex items-start gap-2 rounded-xl bg-amber-500/15 px-4 py-3 text-base text-amber-50 ring-1 ring-amber-400/40">
+        <p role="alert" className="flex items-start gap-2 rounded-xl bg-high-bg px-4 py-3 text-base text-high ring-1 ring-high-solid">
           <TriangleAlert className="mt-0.5 size-5 shrink-0" aria-hidden />
           The simulated band for R-{rid} is on (Admin), so readings from the real devices are ignored. Turn it off in
           Admin to use the band and the bed sensor.
@@ -107,12 +107,12 @@ function PolarCard({ residentId, who }: { residentId: number; who: string }) {
         <span
           role="status"
           className={cn(
-            "inline-flex h-9 items-center gap-2 rounded-full px-3 text-sm font-medium ring-1",
+            "inline-flex h-9 items-center gap-2 rounded-full px-3 text-sm ring-1",
             p.status === "connected" && !stale
-              ? "bg-teal-500/15 text-teal-100 ring-teal-400/40"
+              ? "bg-surface-2 text-accent ring-accent"
               : p.status === "reconnecting" || stale
-                ? "bg-amber-500/15 text-amber-100 ring-amber-400/40"
-                : "bg-white/5 text-muted-foreground ring-white/10",
+                ? "bg-high-bg text-high ring-high-solid"
+                : "bg-surface-2 text-muted-foreground ring-line",
           )}
         >
           {(p.status === "connecting" || p.status === "reconnecting") && <Loader2 className="size-4 animate-spin" aria-hidden />}
@@ -123,11 +123,11 @@ function PolarCard({ residentId, who }: { residentId: number; who: string }) {
 
       <div className="mt-4 flex items-end gap-4">
         <Heart
-          className={cn("mb-3 size-12 shrink-0", p.hr !== null && !stale ? "animate-pulse fill-rose-500/80 text-rose-400" : "text-white/20")}
+          className={cn("mb-3 size-12 shrink-0", p.hr !== null && !stale ? "animate-pulse fill-accent text-accent" : "text-foreground")}
           aria-hidden
         />
-        <p className="font-mono text-8xl font-semibold leading-none tabular-nums" aria-live="polite" aria-label="Heart rate">
-          {p.hr ?? "--"}
+        <p className="text-8xl font-bold leading-none tabular-nums" aria-live="polite" aria-label="Heart rate">
+          {p.hr ?? "—"}
         </p>
         <p className="mb-2 text-2xl text-muted-foreground">bpm</p>
       </div>
@@ -172,7 +172,7 @@ function BedCard({ info, residentId }: { info: DevicesResponse | null; residentI
   useEffect(() => {
     let stop = false;
     if (!url) return;
-    QRCode.toDataURL(url, { margin: 1, width: 480, errorCorrectionLevel: "M", color: { dark: "#0d1424", light: "#ffffff" } })
+    QRCode.toDataURL(url, { margin: 1, width: 480, errorCorrectionLevel: "M", color: { dark: "#1c1916", light: "#ffffff" } })
       .then((d) => !stop && setQr(d))
       .catch(() => !stop && setQr(null));
     return () => {
@@ -188,19 +188,19 @@ function BedCard({ info, residentId }: { info: DevicesResponse | null; residentI
   return (
     <Panel title="iPhone bed sensor">
       <div className="flex flex-col gap-4 sm:flex-row">
-        <div className="flex size-52 shrink-0 items-center justify-center rounded-xl bg-white p-2">
+        <div className="flex size-52 shrink-0 items-center justify-center rounded-xl bg-surface-2 p-2">
           {url && qr ? (
             // eslint-disable-next-line @next/next/no-img-element -- a data: URL generated in the browser
             <img src={qr} alt={`QR code for ${url}`} className="size-full" />
           ) : (
-            <p className="p-3 text-center text-sm text-slate-700">Set PUBLIC_URL in .env to the tunnel&apos;s https URL</p>
+            <p className="p-3 text-center text-sm text-muted-foreground">Set PUBLIC_URL in .env to the tunnel&apos;s https URL</p>
           )}
         </div>
         <div className="min-w-0 space-y-2 text-base">
           <p className="text-muted-foreground">Scan with the iPhone camera, then tap Start sensor on the phone.</p>
           {url ? (
             <div className="flex items-center gap-2">
-              <code className="min-w-0 break-all rounded bg-white/5 px-2 py-1 text-sm">{url}</code>
+              <code className="min-w-0 break-all rounded bg-surface-2 px-2 py-1 text-sm">{url}</code>
               <button
                 type="button"
                 aria-label="Copy URL"
@@ -208,11 +208,11 @@ function BedCard({ info, residentId }: { info: DevicesResponse | null; residentI
                   void navigator.clipboard?.writeText(url).then(() => setCopied(true));
                   setTimeout(() => setCopied(false), 1500);
                 }}
-                className="flex size-10 shrink-0 items-center justify-center rounded-lg ring-1 ring-white/10 hover:bg-white/5"
+                className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-line hover:bg-surface-2"
               >
                 <Copy className="size-4" aria-hidden />
               </button>
-              {copied && <span className="text-sm text-teal-200">Copied</span>}
+              {copied && <span className="text-sm text-accent">Copied</span>}
             </div>
           ) : (
             <Warn>
@@ -227,7 +227,7 @@ function BedCard({ info, residentId }: { info: DevicesResponse | null; residentI
         <Item
           label="State"
           value={live && phone?.state ? phone.state : bed ? `${bed.in_bed ? "in bed" : "out of bed"} (phone not streaming)` : "—"}
-          icon={<Smartphone className={cn("size-4", live ? "text-teal-300" : "text-white/30")} aria-hidden />}
+          icon={<Smartphone className={cn("size-4", live ? "text-accent" : "text-foreground")} aria-hidden />}
         />
         <Item label="Movement" value={live && phone?.bed_motion !== undefined ? `${phone.bed_motion.toFixed(1)} / 10` : "—"} />
         <Item label="Last summary" value={age === null ? "—" : age < 1.5 ? "just now" : `${age.toFixed(0)} s ago`} />
@@ -259,22 +259,22 @@ function DeviceList({ info }: { info: DevicesResponse | null }) {
           <table className="w-full min-w-[32rem] text-left text-base">
             <thead className="text-sm text-muted-foreground">
               <tr>
-                <th className="py-1 pr-3 font-medium">Device</th>
-                <th className="py-1 pr-3 font-medium">Resident</th>
-                <th className="py-1 pr-3 font-medium">Status</th>
-                <th className="py-1 pr-3 font-medium">Last reading</th>
-                <th className="py-1 font-medium">Readings</th>
+                <th className="py-1 pr-3 ">Device</th>
+                <th className="py-1 pr-3 ">Resident</th>
+                <th className="py-1 pr-3 ">Status</th>
+                <th className="py-1 pr-3 ">Last reading</th>
+                <th className="py-1 ">Readings</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((d) => (
-                <tr key={`${d.kind}-${d.resident_id}`} className="border-t border-white/10">
+                <tr key={`${d.kind}-${d.resident_id}`} className="border-t border-line">
                   <td className="py-2 pr-3">{d.kind === "polar" ? "Polar band (wrist)" : "iPhone (bed sensor)"}</td>
                   <td className="py-2 pr-3">
                     R-{d.resident_id} {roster[d.resident_id]?.name ?? ""}
                   </td>
                   <td className="py-2 pr-3">
-                    <span className={cn("font-medium", d.online ? "text-teal-200" : "text-muted-foreground")}>
+                    <span className={cn("", d.online ? "text-accent" : "text-muted-foreground")}>
                       {d.online ? "● Online" : d.sockets > 0 ? "○ Connected, silent" : "○ Offline"}
                     </span>
                   </td>
@@ -311,7 +311,7 @@ function Item({ label, value, icon }: { label: string; value: string; icon?: Rea
 
 function Warn({ children }: { children: React.ReactNode }) {
   return (
-    <p className="mt-3 flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-50 ring-1 ring-amber-400/30">
+    <p className="mt-3 flex items-start gap-2 rounded-lg bg-high-bg px-3 py-2 text-sm text-high ring-1 ring-high-solid">
       <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden /> <span>{children}</span>
     </p>
   );

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { floorRooms, queueRows, reuseRows, splitFlagged } from "@/lib/queue";
+import { arrange, floorRooms, holdOrder, queueRows, reuseRows, splitFlagged, summaryParts } from "@/lib/queue";
 import type { QueueMessage, RosterEntry, Tier, WireCard } from "@/lib/types";
 
 const card = (id: number, tier: Tier): WireCard => ({
@@ -46,5 +46,43 @@ describe("reuseRows", () => {
     const c = reuseRows(cache, queueRows(changed, roster));
     expect(c[0]).not.toBe(a[0]);
     expect(c[1]).toBe(a[1]);
+  });
+});
+
+describe("calm re-ranking", () => {
+  const none = new Set<number>();
+
+  it("holds the shown order for 5 s, then re-ranks", () => {
+    const a = holdOrder(null, [1, 2, 3], none, 0);
+    const held = holdOrder(a, [2, 1, 3], none, 2000);
+    expect(held.ids).toEqual([1, 2, 3]);
+    expect(holdOrder(held, [2, 1, 3], none, 2500)).toBe(held); // stable identity while nothing changes
+    expect(holdOrder(held, [2, 1, 3], none, 5000).ids).toEqual([2, 1, 3]);
+  });
+
+  it("re-ranks at once after a quiet spell", () => {
+    const a = holdOrder(null, [1, 2], none, 0);
+    expect(holdOrder(a, [2, 1], none, 60_000).ids).toEqual([2, 1]);
+  });
+
+  it("drops residents who leave and appends new ones while held", () => {
+    const a = holdOrder(null, [1, 2, 3], none, 0);
+    expect(holdOrder(a, [4, 3, 1], none, 1000).ids).toEqual([1, 3, 4]);
+  });
+
+  it("a CRITICAL resident moving up interrupts the hold", () => {
+    const a = holdOrder(null, [1, 2, 3], none, 0);
+    expect(holdOrder(a, [3, 1, 2], new Set([3]), 1000).ids).toEqual([3, 1, 2]);
+    expect(holdOrder(a, [9, 1, 2, 3], new Set([9]), 1000).ids).toEqual([9, 1, 2, 3]);
+  });
+
+  it("arranges rows and words the summary", () => {
+    expect(arrange([{ id: 1 }, { id: 2 }], [2, 1, 5]).map((r) => r.id)).toEqual([2, 1]);
+    const parts = summaryParts({ tiers: { CRITICAL: 0, HIGH: 1, WATCH: 2, STABLE: 117 }, overdue_checks: 9, devices_offline: 1 });
+    expect(parts.map((p) => `${p.n} ${p.text}`)).toEqual([
+      "1 to check soon", "2 to keep an eye on", "117 resting as usual", "1 device task", "9 rounds overdue",
+    ]);
+    const fall = summaryParts({ tiers: { CRITICAL: 1, HIGH: 0, WATCH: 0, STABLE: 119 }, overdue_checks: 0, devices_offline: 0 });
+    expect(fall.map((p) => `${p.n} ${p.text}`)).toEqual(["1 to go to now", "119 resting as usual"]);
   });
 });

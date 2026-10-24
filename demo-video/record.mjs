@@ -92,13 +92,21 @@ async function key(page, k, wait = 0) {
 }
 async function gotoQueue(page) {
   await page.goto(BASE + "/", { waitUntil: "networkidle" });
-  await page.getByText("Who to check next", { exact: false }).first().waitFor();
+  await page.getByText("Who to check next", { exact: false }).first().waitFor(); // "Rounds queue · who to check next"
   await sleep(1500);
 }
 async function scrollBy(page, dy, ms = 1600) {
   const steps = 24;
   for (let i = 0; i < steps; i++) { await page.mouse.wheel(0, dy / steps); await sleep(ms / steps); }
 }
+// The resident page shows the care-plan quotes inline under "From her care plan" (no button to open).
+async function showCarePlan(page, hold) {
+  const heading = page.getByRole("heading", { name: /From (her|his) care plan/ }).first();
+  if (!(await heading.count())) return;
+  await heading.scrollIntoViewIfNeeded(); await sleep(800);
+  await moveTo(page, heading, { pause: 600 }); await sleep(hold);
+}
+// The queue's "Check next" card links "Open <name>'s page"; other residents are whole-row links.
 async function openResidentFromQueue(page, id) {
   const card = page.locator(`a[href="/resident/${id}"]`, { hasText: "Open" }).first();
   const target = (await card.count()) ? card : page.locator(`a[href="/resident/${id}"]`).first();
@@ -140,11 +148,7 @@ const SCENES = {
     await openResidentFromQueue(page, 17);
     await page.mouse.move(700, 450, { steps: 40 }); await sleep(2500);
     await page.mouse.move(1000, 520, { steps: 30 }); await sleep(2500);
-    const cites = page.getByRole("button", { name: /Care-plan citations/ }).first();
-    if (await cites.count()) {
-      await cites.scrollIntoViewIfNeeded(); await sleep(1200);
-      await moveTo(page, cites, { click: true, pause: 600 }); await sleep(4000);
-    }
+    await showCarePlan(page, 4000);
     await scrollBy(page, 500, 2500); await sleep(2500);
     await scrollBy(page, -900, 2000); await sleep(1000);
     await key(page, "4", 7000);          // 02:20 confusion noted
@@ -183,8 +187,7 @@ const SCENES = {
     await page.mouse.move(900, 420, { steps: 30 });
     await page.getByText("Snowflake Cortex ·", { exact: false }).first().waitFor({ timeout: 45000 }).catch(() => {});
     await sleep(3000);
-    const cites = page.getByRole("button", { name: /Care-plan citations/ }).first();
-    if (await cites.count()) { await cites.scrollIntoViewIfNeeded(); await moveTo(page, cites, { click: true, pause: 500 }); await sleep(4500); }
+    await showCarePlan(page, 4500);
     await rec.stop();
   },
 

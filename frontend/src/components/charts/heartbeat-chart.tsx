@@ -3,12 +3,16 @@
 import ReactEChartsCore from "echarts-for-react/esm/core";
 import { useMemo } from "react";
 
+import { useTheme } from "@/hooks/use-theme";
+import { PALETTES } from "@/lib/chart-options";
 import { echarts } from "@/lib/echarts";
 
 type Props = { intervalsMs: number[]; expectedMs: number };
 
 /** Gaps between consecutive heartbeats as seen by this browser; the dashed line is the server interval. */
 export function HeartbeatChart({ intervalsMs, expectedMs }: Props) {
+  const { theme } = useTheme();
+  const pal = PALETTES[theme];
   const option = useMemo(
     () => ({
       animation: false,
@@ -17,32 +21,32 @@ export function HeartbeatChart({ intervalsMs, expectedMs }: Props) {
       xAxis: {
         type: "category",
         data: intervalsMs.map((_, i) => i - intervalsMs.length + 1),
-        axisLabel: { color: "#8b93a7" },
-        axisLine: { lineStyle: { color: "#2a3142" } },
+        axisLabel: { color: pal.muted },
+        axisLine: { lineStyle: { color: pal.axis } },
       },
       yAxis: {
         type: "value",
         min: 0,
         max: Math.max(expectedMs * 1.5, ...intervalsMs),
-        axisLabel: { color: "#8b93a7", formatter: (v: number) => `${v / 1000}s` },
-        splitLine: { lineStyle: { color: "#1f2533" } },
+        axisLabel: { color: pal.muted, formatter: (v: number) => `${v / 1000}s` },
+        splitLine: { lineStyle: { color: pal.grid } },
       },
       series: [
         {
           type: "bar",
           data: intervalsMs,
-          itemStyle: { color: "#5eead4", borderRadius: [3, 3, 0, 0] },
+          itemStyle: { color: pal.series[0], borderRadius: [3, 3, 0, 0] },
           markLine: {
             symbol: "none",
             silent: true,
             label: { show: false },
-            lineStyle: { color: "#94a3b8", type: "dashed" },
+            lineStyle: { color: pal.faint, type: "dashed" },
             data: [{ yAxis: expectedMs }],
           },
         },
       ],
     }),
-    [intervalsMs, expectedMs],
+    [intervalsMs, expectedMs, pal],
   );
 
   return (

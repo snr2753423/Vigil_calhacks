@@ -1,15 +1,18 @@
 "use client";
 
-import { Moon, Pause, Radio, Rewind, Volume2, VolumeX } from "lucide-react";
+import { Moon, Settings, Sun, Volume2, VolumeX } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "cn";
 
 import { ConnectionBadge } from "@/components/connection-badge";
 import { NavMenu } from "@/components/nav-menu";
 import { StaffOnDuty } from "@/components/staff-on-duty";
 import { useClock } from "@/hooks/use-clock";
-import { FACILITY_SHORT_NAME, formatFacilityClock } from "@/lib/facility";
+import { useTheme } from "@/hooks/use-theme";
+import { FACILITY_SHORT_NAME } from "@/lib/facility";
+import { facilityClock12 } from "@/lib/format";
 import { useLiveStore } from "@/store/live";
 import { ROLES, type Role, usePrefs } from "@/store/prefs";
 
@@ -17,93 +20,119 @@ export function AppHeader() {
   const path = usePathname();
   const { now, offsetS, replay } = useClock();
   const sim = useLiveStore((s) => s.sim);
-  const night = useLiveStore((s) => s.queue?.night ?? false);
-  const clock = now === null ? "--:--:--" : formatFacilityClock(now, offsetS);
+  const clock = now === null ? "" : facilityClock12(now, offsetS);
   if (path.startsWith("/bed/")) return null; // the iPhone bed-sensor page is a standalone tool
-  const moon = night || (!replay && !!sim?.force_night);
-  const clockTitle = replay ? "Replay time (last night)" : sim?.force_night ? "Night mode forced for the demo" : undefined;
+  const clockTitle = replay ? "Replay time (last night)" : sim?.force_night ? "Night mode forced for the demo" : "Facility time";
+  const note = replay ? null : [sim?.paused && "paused", sim?.force_night && "night mode"].filter(Boolean).join(" · ");
 
   return (
-    <header className="z-40 border-b sm:sticky sm:top-0 border-border/60 bg-background/90 backdrop-blur">
-      <div className="mx-auto flex max-w-[96rem] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5">
-        <Link href="/" className="flex items-baseline gap-2.5">
-          <span className="text-2xl font-semibold tracking-tight text-teal-300">Vigil</span>
-          <span className="hidden text-sm text-muted-foreground sm:inline">{FACILITY_SHORT_NAME}</span>
+    <header className="print-hide border-b border-line bg-background">
+      <div className="mx-auto flex max-w-[80rem] flex-wrap items-center gap-x-6 gap-y-3 px-4 py-3.5 sm:px-6">
+        <Link href="/" className="flex min-h-11 items-baseline gap-2.5">
+          <span className="text-[22px] font-bold tracking-tight text-accent">Vigil</span>
+          <span className="text-muted-foreground">{FACILITY_SHORT_NAME}</span>
         </Link>
         <NavMenu />
-        {/* Phones: logo, menu and clock on the first row, the status controls on the second. */}
-        <Clock clock={clock} moon={moon} title={clockTitle} className="ml-auto flex sm:hidden" />
-        <StaffOnDuty />
-        <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:justify-end">
-          <span
-            className={cn(
-              "inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-semibold uppercase ring-1",
-              replay ? "bg-violet-500/20 text-violet-100 ring-violet-400/50" : "bg-teal-500/15 text-teal-100 ring-teal-400/40",
-            )}
-          >
-            {replay ? <Rewind className="size-4" aria-hidden /> : <Radio className="size-4" aria-hidden />}
-            {replay ? "Replay" : "Live"}
+        <div className="ml-auto flex items-center gap-3 sm:gap-[18px]">
+          <StaffOnDuty className="hidden text-muted-foreground xl:block" />
+          <span className="flex flex-col items-end leading-tight">
+            <time className="text-[22px] font-bold whitespace-nowrap" title={clockTitle} suppressHydrationWarning>
+              {clock}
+            </time>
+            {note && <span className="text-sm text-muted-foreground">{note}</span>}
           </span>
-          {sim?.paused && (
-            <span className="inline-flex h-9 items-center gap-1.5 rounded-full bg-amber-500/15 px-3 text-sm font-medium text-amber-100 ring-1 ring-amber-400/40">
-              <Pause className="size-4" aria-hidden /> Paused
-            </span>
-          )}
           <ConnectionBadge />
-          <RoleSwitcher />
-          <SoundToggle />
-          <Clock clock={clock} moon={moon} title={clockTitle} className="hidden sm:flex" />
+          <ThemeToggle />
+          <SettingsMenu />
         </div>
       </div>
     </header>
   );
 }
 
-function Clock({ clock, moon, title, className }: { clock: string; moon: boolean; title?: string; className: string }) {
-  return (
-    <div className={cn("items-center gap-1.5", className)} title={title}>
-      {moon && <Moon className="size-5 text-indigo-200" aria-label="Night" />}
-      <time className="text-right font-mono text-xl tabular-nums sm:min-w-[6.2rem] sm:text-2xl" suppressHydrationWarning>
-        {clock}
-      </time>
-    </div>
-  );
-}
+const iconBtn =
+  "flex size-11 shrink-0 items-center justify-center rounded-[10px] border border-line text-muted-foreground hover:bg-surface-2 hover:text-foreground";
 
-function RoleSwitcher() {
-  const role = usePrefs((s) => s.role);
-  const setRole = usePrefs((s) => s.setRole);
-  return (
-    <label className="flex items-center">
-      <span className="sr-only">Role</span>
-      <select
-        value={role}
-        onChange={(e) => setRole(e.target.value as Role)}
-        className="h-9 rounded-lg border border-input bg-input/30 px-2 text-sm"
-      >
-        {(Object.keys(ROLES) as Role[]).map((r) => (
-          <option key={r} value={r}>
-            {ROLES[r].short}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function SoundToggle() {
-  const sound = usePrefs((s) => s.sound);
-  const setSound = usePrefs((s) => s.setSound);
+/** Day / Night: follows the facility clock until tapped; remembered on this device. */
+function ThemeToggle() {
+  const { theme, choice, toggle } = useTheme();
+  const next = theme === "night" ? "day" : "night";
   return (
     <button
       type="button"
-      onClick={() => setSound(!sound)}
-      aria-pressed={sound}
-      className="flex size-9 items-center justify-center rounded-lg text-muted-foreground ring-1 ring-input hover:bg-white/5"
-      title={sound ? "Alert sound on" : "Alert sound off"}
+      onClick={toggle}
+      className={iconBtn}
+      title={`${theme === "night" ? "Night" : "Day"} colours · ${choice === "auto" ? "follows the facility clock (night 9 PM–7 AM)" : "set on this device"}`}
+      aria-label={`Night or day colours: now ${theme}. Switch to ${next}`}
     >
-      {sound ? <Volume2 className="size-5" aria-hidden /> : <VolumeX className="size-5" aria-hidden />}
-      <span className="sr-only">{sound ? "Alert sound on" : "Alert sound off"}</span>
+      {theme === "night" ? <Moon className="size-5" aria-hidden /> : <Sun className="size-5" aria-hidden />}
     </button>
+  );
+}
+
+/** Role and alert sound: per-device settings that don't need to sit in the header row. */
+function SettingsMenu() {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const role = usePrefs((s) => s.role);
+  const setRole = usePrefs((s) => s.setRole);
+  const sound = usePrefs((s) => s.sound);
+  const setSound = usePrefs((s) => s.setSound);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={box} className="relative">
+      <button
+        type="button"
+        className={iconBtn}
+        aria-expanded={open}
+        aria-haspopup="true"
+        onClick={() => setOpen(!open)}
+        title={`${ROLES[role].label} · sound ${sound ? "on" : "off"}`}
+      >
+        <Settings className="size-5" aria-hidden />
+        <span className="sr-only">Settings: role and alert sound</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 z-50 mt-1 w-72 space-y-3 rounded-[14px] border border-line bg-surface p-4 shadow-[var(--shadow)]">
+          <label className="block">
+            <span className="mb-1 block text-sm text-muted-foreground">I am the</span>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value as Role)}
+              className="vg-input"
+            >
+              {(Object.keys(ROLES) as Role[]).map((r) => (
+                <option key={r} value={r}>
+                  {ROLES[r].label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => setSound(!sound)}
+            aria-pressed={sound}
+            className={cn("vg-btn-secondary w-full justify-start")}
+          >
+            {sound ? <Volume2 className="size-5" aria-hidden /> : <VolumeX className="size-5" aria-hidden />}
+            Alert sound {sound ? "on" : "off"}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

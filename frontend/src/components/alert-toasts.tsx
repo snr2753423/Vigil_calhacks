@@ -6,7 +6,6 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { cn } from "cn";
 
-import { TierChip } from "@/components/tier-chip";
 import { useNow } from "@/hooks/use-now";
 import type { ToastAlert } from "@/lib/live";
 import { playCriticalChime } from "@/lib/sound";
@@ -53,42 +52,37 @@ export function AlertToasts() {
 
 function Toast({ alert: a, onDismiss }: { alert: ToastAlert; onDismiss: () => void }) {
   const t = TIERS[a.tier];
-  const reason = a.rule?.text ?? a.factors[0] ?? "Priority rose";
+  const reason = a.plain_reason ?? a.rule?.text ?? a.factors[0] ?? "Priority rose";
   return (
     <div
       role={a.tier === "CRITICAL" ? "alert" : "status"}
       className={cn(
-        "pointer-events-auto relative overflow-hidden rounded-xl bg-popover p-4 pl-5 shadow-2xl ring-1 ring-white/15",
+        "vg-card pointer-events-auto border-l-[6px] p-4",
+        t.edge,
         "animate-in fade-in slide-in-from-right-8 duration-300",
       )}
     >
-      <span className={cn("absolute inset-y-0 left-0 w-1.5", t.accent)} aria-hidden />
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1 space-y-1.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <TierChip tier={a.tier} score={a.score} size="sm" />
-            <span className="text-sm text-muted-foreground">{t.action}</span>
-          </div>
-          <p className="text-lg font-semibold leading-tight">
+          <p className={cn("font-bold", t.text)}>
+            {t.label} · {a.tier === "CRITICAL" ? "go now" : t.action.toLowerCase()}
+          </p>
+          <p className="text-lg leading-tight font-bold">
             {a.name} <span className="font-normal text-muted-foreground">· Room {a.room}</span>
           </p>
-          <p className="text-base leading-snug">{reason}</p>
+          <p className="leading-snug">{reason}</p>
         </div>
         <button
           type="button"
           onClick={onDismiss}
-          className="-mr-1 -mt-1 flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-white/10"
+          className="-mt-1 -mr-1 flex size-11 shrink-0 items-center justify-center rounded-[10px] text-muted-foreground hover:bg-surface-2"
           aria-label={`Dismiss alert for ${a.name}`}
         >
           <X className="size-5" />
         </button>
       </div>
-      <Link
-        href={`/resident/${a.resident_id}`}
-        onClick={onDismiss}
-        className="mt-3 flex h-11 items-center justify-center rounded-lg bg-white/10 text-base font-medium hover:bg-white/15"
-      >
-        Open {a.name.split(" ")[0]}
+      <Link href={`/resident/${a.resident_id}`} onClick={onDismiss} className="vg-btn-primary mt-3 w-full">
+        Open {a.name.split(" ")[0]}&apos;s page
       </Link>
     </div>
   );

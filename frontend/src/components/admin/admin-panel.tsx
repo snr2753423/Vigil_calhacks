@@ -53,9 +53,9 @@ export function AdminPanel() {
   };
 
   return (
-    <main className="mx-auto w-full max-w-6xl flex-1 space-y-4 px-3 py-4 sm:px-4">
+    <main className="mx-auto w-full max-w-[80rem] flex-1 space-y-4 px-4 pt-6 pb-16 sm:px-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Admin · demo controls</h1>
+        <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Admin · demo controls</h1>
         <p className="text-base text-muted-foreground">
           Stored data is always real time; night mode and the display clock only change what the night-time rules
           and the header clock see.
@@ -64,7 +64,7 @@ export function AdminPanel() {
       {msg && (
         <p
           role="status"
-          className={cn("rounded-xl px-4 py-3 text-base", msg.ok ? "bg-emerald-500/15 text-emerald-100" : "bg-red-500/15 text-red-100")}
+          className={cn("rounded-xl px-4 py-3 text-base", msg.ok ? "bg-stable-bg text-stable" : "bg-crit-bg text-crit")}
         >
           {msg.text}
         </p>
@@ -93,7 +93,7 @@ export function AdminPanel() {
             <Stat label="Residents streaming" value={String(status?.live_sim?.residents ?? "—")} />
             <Stat label="Evaluator" value={status?.evaluator ? `${status.evaluator.phase} · ${status.evaluator.last_ms} ms` : "—"} />
           </dl>
-          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4">
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-4">
             <BigButton
               onClick={() => act(sim?.simulated_band ? "Simulated band off" : "Simulated band on", "/api/sim/simulated_band", { enabled: !sim?.simulated_band })}
               icon={WatchIcon}
@@ -168,7 +168,7 @@ function NightPanel({ sim, act }: { sim: SimState | null; act: Act }) {
         <span className="text-base text-muted-foreground">Night rules (22:00–06:00) apply now, e.g. fall-prevention bed exits.</span>
       </div>
       <form
-        className="mt-4 flex flex-wrap items-end gap-2 border-t border-white/10 pt-4"
+        className="mt-4 flex flex-wrap items-end gap-2 border-t border-line pt-4"
         onSubmit={(e) => {
           e.preventDefault();
           try {
@@ -187,7 +187,7 @@ function NightPanel({ sim, act }: { sim: SimState | null; act: Act }) {
             onChange={(e) => setTime(e.target.value)}
             inputMode="numeric"
             placeholder="HH:MM"
-            className="h-12 w-28 rounded-lg border border-input bg-background/60 px-3 font-mono text-lg text-foreground"
+            className="h-12 w-28 rounded-lg border border-input bg-background/60 px-3 text-lg text-foreground"
           />
         </label>
         <BigButton type="submit" icon={Clock}>
@@ -203,7 +203,7 @@ function NightPanel({ sim, act }: { sim: SimState | null; act: Act }) {
       </form>
       <p className="mt-2 text-sm text-muted-foreground">
         Displayed {now === null ? "--:--" : formatFacilityClock(now, offset)} · offset {Math.round(offset / 60)} min
-        {err && <span className="ml-2 text-red-200">{err}</span>}
+        {err && <span className="ml-2 text-crit">{err}</span>}
       </p>
     </Panel>
   );
@@ -211,18 +211,18 @@ function NightPanel({ sim, act }: { sim: SimState | null; act: Act }) {
 
 export function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-2xl bg-card p-4 ring-1 ring-white/10">
-      <h2 className="mb-3 text-xl font-semibold">{title}</h2>
+    <section className="vg-card p-5">
+      <h2 className="mb-3 text-xl font-bold">{title}</h2>
       {children}
     </section>
   );
 }
 
 const TONES = {
-  default: "bg-white/10 hover:bg-white/15",
-  teal: "bg-teal-400 text-teal-950 hover:bg-teal-300",
-  red: "bg-red-500/20 text-red-100 ring-1 ring-red-400/50 hover:bg-red-500/30",
-  indigo: "bg-indigo-500/30 text-indigo-50 ring-1 ring-indigo-300/60",
+  default: "bg-surface-2 hover:bg-surface-2",
+  teal: "bg-accent text-accent-ink hover:bg-accent",
+  red: "bg-crit-bg text-crit ring-1 ring-crit-solid hover:bg-crit-bg",
+  indigo: "bg-surface-2 text-foreground border border-line",
 };
 
 export function BigButton({
@@ -240,7 +240,7 @@ export function BigButton({
     <button
       type="button"
       aria-pressed={pressed}
-      className={cn("flex h-12 items-center gap-2 rounded-xl px-4 text-base font-semibold disabled:opacity-50", TONES[tone])}
+      className={cn("flex h-12 items-center gap-2 rounded-xl px-4 text-base font-bold disabled:opacity-50", TONES[tone])}
       {...rest}
     >
       {Icon && <Icon className="size-5" aria-hidden />}

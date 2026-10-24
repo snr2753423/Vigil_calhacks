@@ -2,165 +2,265 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
+/* Night theme = the shadcn `dark` variant, so library styles that key off it still apply. */
+@custom-variant dark (&:is([data-theme="night"] *));
 
+/* Design tokens from design/mockup.html (Phase 11). Utilities: bg-surface, bg-surface-2, border-line, text-soft,
+   bg-accent / text-accent-ink, text-crit / bg-crit-bg / border-crit-solid (and high, watch, stable). The shadcn
+   names map onto them. text-* tier and soft colours are the AA "-text" shades; *-solid and soft-line are exact. */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-soft: var(--soft-text);
+  --color-soft-line: var(--soft);
   --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-foreground: var(--accent-ink);
+  --color-crit: var(--crit-text);
+  --color-crit-solid: var(--crit);
+  --color-crit-bg: var(--crit-bg);
+  --color-high: var(--high-text);
+  --color-high-solid: var(--high);
+  --color-high-bg: var(--high-bg);
+  --color-watch: var(--watch-text);
+  --color-watch-solid: var(--watch);
+  --color-watch-bg: var(--watch-bg);
+  --color-stable: var(--stable);
+  --color-stable-solid: var(--stable);
+  --color-stable-bg: var(--stable-bg);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--text);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--text);
+  --color-muted: var(--surface-2);
+  --color-muted-foreground: var(--muted);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-ink);
+  --color-secondary: var(--surface-2);
+  --color-secondary-foreground: var(--text);
+  --color-destructive: var(--crit);
+  --color-border: var(--line);
+  --color-input: var(--line);
+  --color-ring: var(--accent);
+  --font-sans: var(--font-sans);
+  --font-heading: var(--font-sans);
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+  --radius-3xl: 22px;
+  --radius-4xl: 26px;
 }
 
-:root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+/* Day: warm paper, sage accent. */
+:root,
+[data-theme="day"] {
+  --bg: #f6f1e9;
+  --surface: #fffdf9;
+  --surface-2: #f0e9de;
+  --line: #e2d8c9;
+  --text: #2b2723;
+  --muted: #6f665c;
+  --soft: #8f857a;
+  --accent: #3f6f63;
+  --accent-ink: #ffffff;
+  --crit: #b4432f;
+  --crit-bg: #f7e1da;
+  --high: #b36b12;
+  --high-bg: #f7e8d0;
+  --watch: #7a6a1c;
+  --watch-bg: #f1ebcd;
+  --stable: #5d6b66;
+  --stable-bg: #e6ebe7;
+  --band: rgba(63, 111, 99, 0.14);
+  /* AA text shades: the mockup's soft and day tier colours are under 4.5:1 for small text, so text uses these
+     (borders, dots and fills keep the exact tokens). */
+  --soft-text: #716860;
+  --crit-text: #ab3f2c;
+  --high-text: #8f550e;
+  --watch-text: #73641a;
+  --shadow: 0 1px 2px rgba(60, 40, 20, 0.06), 0 6px 18px rgba(60, 40, 20, 0.06);
+  color-scheme: light;
 }
 
-/* Night-shift palette: deep navy, low glare, high-contrast text (SPEC §11). */
-.dark {
-  --background: oklch(0.16 0.022 258);
-  --foreground: oklch(0.96 0.008 250);
-  --card: oklch(0.205 0.026 258);
-  --card-foreground: oklch(0.96 0.008 250);
-  --popover: oklch(0.225 0.028 258);
-  --popover-foreground: oklch(0.96 0.008 250);
-  --primary: oklch(0.82 0.11 190);
-  --primary-foreground: oklch(0.2 0.03 220);
-  --secondary: oklch(0.27 0.028 258);
-  --secondary-foreground: oklch(0.96 0.008 250);
-  --muted: oklch(0.26 0.026 258);
-  --muted-foreground: oklch(0.74 0.02 255);
-  --accent: oklch(0.28 0.03 258);
-  --accent-foreground: oklch(0.96 0.008 250);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 11%);
-  --input: oklch(1 0 0 / 16%);
-  --ring: oklch(0.82 0.11 190 / 70%);
-  --chart-1: oklch(0.82 0.11 190);
-  --chart-2: oklch(0.75 0.12 250);
-  --chart-3: oklch(0.8 0.14 80);
-  --chart-4: oklch(0.7 0.15 330);
-  --chart-5: oklch(0.72 0.17 145);
-  --sidebar: oklch(0.205 0.026 258);
-  --sidebar-foreground: oklch(0.96 0.008 250);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.27 0.028 258);
-  --sidebar-accent-foreground: oklch(0.96 0.008 250);
-  --sidebar-border: oklch(1 0 0 / 11%);
-  --sidebar-ring: oklch(0.556 0 0);
+/* Night: warm charcoal, low blue light, amber accent. */
+[data-theme="night"] {
+  --bg: #1c1916;
+  --surface: #26221e;
+  --surface-2: #2f2a25;
+  --line: #3b352e;
+  --text: #f1e6d6;
+  --muted: #b9ab98;
+  --soft: #8e8273;
+  --accent: #d9a35b;
+  --accent-ink: #1c1916;
+  --crit: #e8836c;
+  --crit-bg: #3d2520;
+  --high: #e3a556;
+  --high-bg: #3b2c1a;
+  --watch: #cdbb6a;
+  --watch-bg: #33301d;
+  --stable: #9aa59f;
+  --stable-bg: #2b2e2b;
+  --band: rgba(217, 163, 91, 0.13);
+  --soft-text: #a69985;
+  --crit-text: var(--crit);
+  --high-text: var(--high);
+  --watch-text: var(--watch);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
 }
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-line outline-accent/50;
+  }
+  html {
+    @apply font-sans;
+    /* 17 px base: readable at arm's length on a tablet. */
+    font-size: 106.25%;
+    line-height: 1.45;
   }
   body {
     @apply bg-background text-foreground;
   }
-  button:not(:disabled), [role="button"]:not(:disabled) {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
     cursor: pointer;
   }
-  html {
-    @apply font-sans;
-    /* 17 px base: readable at arm's length on an iPad. */
-    font-size: 106.25%;
+  :focus-visible {
+    outline: 3px solid var(--accent);
+    outline-offset: 2px;
   }
 }
 
-/* CRITICAL rooms on the floor grid: an expanding ring, not just a color (motion off if requested). */
+@layer components {
+  /* Calm card: warm surface, hairline border, soft shadow. */
+  .vg-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+  }
+  /* Small uppercase section label ("CHECK NEXT", "WHY NOW"). */
+  .vg-label {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  .vg-btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 48px;
+    padding: 0 1.5rem;
+    border-radius: 14px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 700;
+    font-size: 1.1rem;
+  }
+  .vg-btn-primary:hover:not(:disabled) {
+    filter: brightness(1.06);
+  }
+  .vg-btn-primary:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+  .vg-btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 48px;
+    padding: 0 1.25rem;
+    border-radius: 14px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--text);
+    font-size: 1.05rem;
+  }
+  .vg-btn-secondary:hover:not(:disabled) {
+    background: var(--surface-2);
+  }
+  .vg-btn-secondary:disabled {
+    opacity: 0.6;
+  }
+  /* Compact outline chip button (replay strip, filters). */
+  .vg-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-height: 44px;
+    padding: 0 0.9rem;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--text);
+  }
+  .vg-chip:hover:not(:disabled) {
+    background: var(--surface-2);
+  }
+  .vg-chip[aria-pressed="true"] {
+    background: var(--surface-2);
+    border-color: var(--soft);
+    font-weight: 700;
+  }
+  .vg-chip:disabled {
+    opacity: 0.6;
+  }
+  .vg-input {
+    min-height: 44px;
+    width: 100%;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--bg);
+    color: var(--text);
+    padding: 0 0.75rem;
+  }
+  .vg-input::placeholder {
+    color: var(--soft);
+  }
+}
+
+/* CRITICAL rooms on the floor plan: a slow ring (no glow), off when reduced motion is asked for. */
 @keyframes vigil-pulse {
-  0% { box-shadow: 0 0 0 0 rgb(239 68 68 / 0.75); }
-  70% { box-shadow: 0 0 0 10px rgb(239 68 68 / 0); }
-  100% { box-shadow: 0 0 0 0 rgb(239 68 68 / 0); }
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--crit) 55%, transparent); }
+  70% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--crit) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--crit) 0%, transparent); }
 }
 .vigil-pulse {
-  animation: vigil-pulse 1.6s ease-out infinite;
+  animation: vigil-pulse 2s ease-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
   .vigil-pulse {
     animation: none;
-    outline: 3px solid rgb(254 202 202);
-    outline-offset: 1px;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }
 
-/* Printing (the shift handoff): light paper colours, no app chrome. Elements marked .print-hide are left out. */
+/* Printing (the shift handoff): paper colours, no app chrome. Elements marked .print-hide are left out. */
 @media print {
-  .dark {
-    --background: #fff;
-    --foreground: #000;
-    --card: #fff;
-    --card-foreground: #000;
-    --muted-foreground: #333;
-    --border: #bbb;
+  :root,
+  [data-theme] {
+    --bg: #fff;
+    --surface: #fff;
+    --surface-2: #fff;
+    --text: #000;
+    --muted: #333;
+    --line: #bbb;
   }
   body > header,
   .print-hide {

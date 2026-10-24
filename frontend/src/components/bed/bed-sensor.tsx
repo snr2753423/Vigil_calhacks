@@ -42,7 +42,7 @@ function say(text: string) {
 }
 
 /** iPhone as an under-pillow bed sensor (SPEC §10, §11.6): DeviceMotion → 1-s summaries → /ws/ingest; the
- *  backend's state machine answers with in bed / out of bed. Needs HTTPS and a tap to start (iOS). */
+ * backend's state machine answers with in bed / out of bed. Needs HTTPS and a tap to start (iOS). */
 export function BedSensor({ residentId }: { residentId: number }) {
   const [running, setRunning] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -222,16 +222,16 @@ export function BedSensor({ residentId }: { residentId: number }) {
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-4 px-4 py-5">
       <header className="flex items-baseline justify-between">
-        <h1 className="text-xl font-semibold">
-          <span className="text-teal-300">Vigil</span> bed sensor · R-{residentId}
+        <h1 className="text-xl font-bold">
+          <span className="text-accent">Vigil</span> bed sensor · R-{residentId}
         </h1>
-        <span className={cn("text-sm", ingest === "open" ? "text-teal-200" : "text-muted-foreground")}>
+        <span className={cn("text-sm", ingest === "open" ? "text-accent" : "text-muted-foreground")}>
           {ingest === "off" ? "stopped" : ingest === "open" ? "● streaming" : `○ ${ingest}`}
         </span>
       </header>
 
       {!running ? (
-        <section className="space-y-4 rounded-2xl bg-card p-5 ring-1 ring-white/10">
+        <section className="space-y-4 vg-card p-5">
           <p className="text-lg">This phone becomes R-{residentId}&apos;s under-mattress bed sensor.</p>
           <ol className="list-decimal space-y-1 pl-5 text-base text-muted-foreground">
             <li>Tap Start sensor and allow motion access.</li>
@@ -242,7 +242,7 @@ export function BedSensor({ residentId }: { residentId: number }) {
             type="button"
             onClick={() => void start()}
             disabled={starting}
-            className="flex h-16 w-full items-center justify-center gap-2 rounded-2xl bg-teal-400 text-xl font-semibold text-teal-950 disabled:opacity-60"
+            className="flex h-16 w-full items-center justify-center gap-2 rounded-2xl bg-accent text-xl font-bold text-accent-ink disabled:opacity-60"
           >
             {starting ? <Loader2 className="size-6 animate-spin" aria-hidden /> : <Play className="size-6" aria-hidden />} Start sensor
           </button>
@@ -254,24 +254,24 @@ export function BedSensor({ residentId }: { residentId: number }) {
             className={cn(
               "rounded-2xl p-5 text-center ring-1",
               calibrating
-                ? "bg-indigo-500/20 ring-indigo-300/50"
+                ? "bg-surface-2 ring-line"
                 : out
-                  ? "bg-amber-500/20 ring-amber-300/60"
-                  : "bg-teal-500/15 ring-teal-300/40",
+                  ? "bg-high-bg ring-high-solid"
+                  : "bg-surface-2 ring-accent",
             )}
           >
             {calibrating && cur ? (
               <>
-                <p className="text-sm uppercase tracking-wide text-indigo-100">
+                <p className="text-sm uppercase tracking-wide text-foreground">
                   Calibrating · step {step.index + 1} of {CALIBRATION_STEPS.length}
                 </p>
-                <p className="mt-2 text-2xl font-semibold">{cur.title}</p>
-                <p className="mt-2 font-mono text-6xl tabular-nums">{step.remainingS}</p>
+                <p className="mt-2 text-2xl font-bold">{cur.title}</p>
+                <p className="mt-2 text-6xl tabular-nums">{step.remainingS}</p>
               </>
             ) : (
               <>
-                {out ? <Footprints className="mx-auto size-12 text-amber-200" aria-hidden /> : <BedDouble className="mx-auto size-12 text-teal-200" aria-hidden />}
-                <p className="mt-2 text-3xl font-semibold">
+                {out ? <Footprints className="mx-auto size-12 text-high" aria-hidden /> : <BedDouble className="mx-auto size-12 text-accent" aria-hidden />}
+                <p className="mt-2 text-3xl font-bold">
                   {bed === null ? "Waiting for data…" : out ? "Out of bed" : `In bed · ${LEVELS[bed.level] ?? ""}`}
                 </p>
                 {lastChange && (
@@ -284,16 +284,16 @@ export function BedSensor({ residentId }: { residentId: number }) {
             )}
           </section>
 
-          <section className="space-y-2 rounded-2xl bg-card p-4 ring-1 ring-white/10">
+          <section className="space-y-2 vg-card p-5">
             <div className="flex items-baseline justify-between text-sm text-muted-foreground">
               <span>Motion</span>
-              <span className="font-mono tabular-nums">
+              <span className="tabular-nums">
                 {energy.toFixed(3)} m/s² · {rate} Hz
               </span>
             </div>
-            <div className="h-6 overflow-hidden rounded-full bg-white/10" role="meter" aria-valuemin={0} aria-valuemax={1} aria-valuenow={fill} aria-label="Motion">
+            <div className="h-6 overflow-hidden rounded-full bg-surface-2" role="meter" aria-valuemin={0} aria-valuemax={1} aria-valuenow={fill} aria-label="Motion">
               <div
-                className={cn("h-full rounded-full transition-[width] duration-300", fill > 0.75 ? "bg-amber-300" : "bg-teal-300")}
+                className={cn("h-full rounded-full transition-[width] duration-300", fill > 0.75 ? "bg-high-solid" : "bg-accent")}
                 style={{ width: `${Math.round(fill * 100)}%` }}
               />
             </div>
@@ -314,15 +314,15 @@ export function BedSensor({ residentId }: { residentId: number }) {
 
           <div className="grid grid-cols-2 gap-3">
             {calibrating ? (
-              <button type="button" onClick={cancelCalibration} className="col-span-2 flex h-14 items-center justify-center gap-2 rounded-xl bg-white/10 text-lg font-semibold">
+              <button type="button" onClick={cancelCalibration} className="col-span-2 flex h-14 items-center justify-center gap-2 rounded-xl bg-surface-2 text-lg font-bold">
                 Cancel calibration
               </button>
             ) : (
               <>
-                <button type="button" onClick={calibrate} disabled={ingest !== "open"} className="flex h-14 items-center justify-center gap-2 rounded-xl bg-indigo-500/30 text-lg font-semibold ring-1 ring-indigo-300/60 disabled:opacity-50">
+                <button type="button" onClick={calibrate} disabled={ingest !== "open"} className="flex h-14 items-center justify-center gap-2 rounded-xl bg-surface-2 text-lg font-bold border border-line disabled:opacity-50">
                   <Ruler className="size-5" aria-hidden /> Calibrate
                 </button>
-                <button type="button" onClick={stop} className="flex h-14 items-center justify-center gap-2 rounded-xl bg-white/10 text-lg font-semibold">
+                <button type="button" onClick={stop} className="flex h-14 items-center justify-center gap-2 rounded-xl bg-surface-2 text-lg font-bold">
                   <Square className="size-5" aria-hidden /> Stop
                 </button>
               </>
@@ -338,7 +338,7 @@ export function BedSensor({ residentId }: { residentId: number }) {
 
 function Warn({ children }: { children: React.ReactNode }) {
   return (
-    <p role="alert" className="flex items-start gap-2 rounded-xl bg-amber-500/15 px-3 py-2 text-base text-amber-50 ring-1 ring-amber-400/40">
+    <p role="alert" className="flex items-start gap-2 rounded-xl bg-high-bg px-3 py-2 text-base text-high ring-1 ring-high-solid">
       <TriangleAlert className="mt-0.5 size-5 shrink-0" aria-hidden /> <span>{children}</span>
     </p>
   );

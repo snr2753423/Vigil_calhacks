@@ -1,27 +1,14 @@
 "use client";
 
 import { Loader2, TrendingUp } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { cn } from "cn";
 
 import { ChartPanel, LegendSwatch } from "@/components/resident/chart-panel";
-import { getJSON } from "@/lib/api";
-import {
-  ANOMALY,
-  BAND,
-  bandedLineOption,
-  EXPECTED,
-  FORECAST,
-  FORECAST_BAND,
-  deltaOption,
-  inBedOption,
-  LINE,
-  motionOption,
-  spo2Option,
-  ZONE,
-} from "@/lib/chart-options";
-import type { AnomalyBucket, AnomalyResponse, Forecast, ForecastResponse, VitalBaselines, VitalsResponse } from "@/lib/types";
-import { useReplayCursor } from "@/hooks/use-clock";
+import { bandedLineOption, deltaOption, inBedOption, motionOption, PALETTES, spo2Option } from "@/lib/chart-options";
+import { useTheme } from "@/hooks/use-theme";
+import type { Forecast, VitalBaselines } from "@/lib/types";
+import { useVitalsWindow } from "@/hooks/use-vitals";
 import { useNow } from "@/hooks/use-now";
 import { facilityHHMM } from "@/lib/format";
 import { useLiveStore } from "@/store/live";
@@ -46,73 +33,27 @@ const REPLAY_RELOAD_STEP_MS: Record<RangeKey, number> = { "6h": 4 * 60_000, "24h
 type Props = { residentId: number; baselines: VitalBaselines; copd: boolean; pronoun: string };
 
 /** HR / RR / SpO₂ / skin-temp change / movement / bed presence from Tiger's continuous aggregates
- *  (vitals_1m for 6 h, vitals_15m for 24 h, vitals_1h for 7 d), with a shared crosshair. */
+ * (vitals_1m for 6 h, vitals_15m for 24 h, vitals_1h for 7 d), with a shared crosshair. */
 export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
   const [range, setRange] = useState<RangeKey>("6h");
-  const [data, setData] = useState<VitalsResponse | null>(null);
-  const [fetchedAt, setFetchedAt] = useState(0);
   const liveHr = useLiveStore((s) => s.liveHr[residentId]);
   const polar = useLiveStore((s) => s.devices[`${residentId}:polar`]);
   const now = useNow();
-  const [anomalies, setAnomalies] = useState<AnomalyBucket[]>([]);
-  const [forecasts, setForecasts] = useState<Forecast[]>([]);
   const lastInsight = useLiveStore((s) => s.lastInsight);
   const forecastTick = lastInsight?.kind === "forecast" && lastInsight.resident_id === residentId ? lastInsight.as_of : null;
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const cursor = useReplayCursor();
-  const step = REPLAY_RELOAD_STEP_MS[range];
-  const replayEnd = cursor === null ? null : Math.ceil(cursor / step) * step;
-  useEffect(() => {
-    const r = RANGES[range];
-    const ctrl = new AbortController();
-    const load = async () => {
-      setLoading(true);
-      // Live: no `to`, the backend uses its own now, so a fast device clock can't send a "future" timestamp.
-      // Replay: everything ends at the cursor (rounded up to the reload step), so nothing after it shows.
-      const from = new Date((replayEnd ?? Date.now()) - r.ms);
-      const q = new URLSearchParams({ metrics: METRICS, from: from.toISOString(), res: r.res });
-      // Snowflake overlay (cached in Tiger): optional — the charts never wait on it or fail because of it.
-      const aq = new URLSearchParams({ kind: "anomaly", from: from.toISOString() });
-      if (replayEnd !== null) {
-        const to = new Date(Math.min(replayEnd, cursor ?? replayEnd)).toISOString();
-        q.set("to", to);
-        aq.set("to", to);
-      }
-      const overlay = getJSON<AnomalyResponse>(`/api/insights/${residentId}?${aq}`, ctrl.signal)
-        .then((r) => r.items)
-        .catch(() => null);
-      // Snowflake FORECAST runs known by the chart's end (made on HIGH/CRITICAL, refreshed every 30 min).
-      const fq = new URLSearchParams({ kind: "forecast", from: new Date((replayEnd ?? Date.now()) - 2 * 3600_000).toISOString() });
-      if (replayEnd !== null) fq.set("to", new Date(Math.min(replayEnd, cursor ?? replayEnd)).toISOString());
-      const fcs = getJSON<ForecastResponse>(`/api/insights/${residentId}?${fq}`, ctrl.signal)
-        .then((r) => r.items)
-        .catch(() => null);
-      try {
-        const asked = Date.now();
-        setData(await getJSON<VitalsResponse>(`/api/residents/${residentId}/vitals?${q}`, ctrl.signal));
-        setFetchedAt(asked);
-        setError(null);
-      } catch (e) {
-        if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : "Could not load vitals");
-      } finally {
-        if (!ctrl.signal.aborted) setLoading(false);
-      }
-      const items = await overlay;
-      if (!ctrl.signal.aborted && items) setAnomalies(items);
-      const f = await fcs;
-      if (!ctrl.signal.aborted && f) setForecasts(f);
-    };
-    void load();
-    const t = replayEnd === null ? setInterval(load, r.refreshMs) : undefined;
-    return () => {
-      clearInterval(t);
-      ctrl.abort();
-    };
-    // `cursor` is read only for the replay's `to`; `replayEnd` (its rounded value) drives reloads.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [residentId, range, replayEnd, forecastTick]);
+  const { theme } = useTheme();
+  const pal = PALETTES[theme];
+  // During a replay the charts end at the cursor and reload as it moves (REPLAY_RELOAD_STEP_MS).
+  const { data, fetchedAt, anomalies, forecasts, error, loading, cursor, replayEnd } = useVitalsWindow({
+    residentId,
+    metrics: METRICS,
+    spanMs: RANGES[range].ms,
+    res: RANGES[range].res,
+    stepMs: REPLAY_RELOAD_STEP_MS[range],
+    refreshMs: RANGES[range].refreshMs,
+    forecasts: true,
+    reloadKey: forecastTick,
+  });
 
   const charts = useMemo(() => {
     if (!data || data.ts.length < 2) return null;
@@ -147,44 +88,44 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
     const hrExp = a.length ? expectedBand(hr.ts, step, a, "hr") : undefined;
     return {
       hr: hasData(hr.values)
-        ? bandedLineOption({ ts: hr.ts, values: hr.values, band: hrBand, name: "Heart rate", unit: " bpm", digits: 0, longRange, height: 200, expected: hrExp, anomalies: dots("hr", s.hr), forecast: fHr, xMax })
+        ? bandedLineOption({ theme, ts: hr.ts, values: hr.values, band: hrBand, name: "Heart rate", unit: " bpm", digits: 0, longRange, height: 200, expected: hrExp, anomalies: dots("hr", s.hr), forecast: fHr, xMax })
         : null,
       rr: hasData(s.rr)
-        ? bandedLineOption({ ts, values: s.rr!, band: rrBand, name: "Resp. rate", unit: "/min", digits: 1, longRange, height: 150, expected: exp("rr"), anomalies: dots("rr", s.rr), forecast: fRr, xMax })
+        ? bandedLineOption({ theme, ts, values: s.rr!, band: rrBand, name: "Resp. rate", unit: "/min", digits: 1, longRange, height: 150, expected: exp("rr"), anomalies: dots("rr", s.rr), forecast: fRr, xMax })
         : null,
       spo2: hasData(s.spo2)
-        ? spo2Option({ ts, values: s.spo2!, scale: copd ? 2 : 1, longRange, height: 150, expected: exp("spo2"), anomalies: dots("spo2", s.spo2), forecast: fSpo2, xMax })
+        ? spo2Option({ theme, ts, values: s.spo2!, scale: copd ? 2 : 1, longRange, height: 150, expected: exp("spo2"), anomalies: dots("spo2", s.spo2), forecast: fSpo2, xMax })
         : null,
       skin: hasData(skinDelta)
-        ? deltaOption({ ts, values: skinDelta, longRange, height: 130, expected: skinExp, anomalies: dots("skin_temp", skinDelta), xMax })
+        ? deltaOption({ theme, ts, values: skinDelta, longRange, height: 130, expected: skinExp, anomalies: dots("skin_temp", skinDelta), xMax })
         : null,
       motion: hasData(s.motion)
-        ? motionOption({ ts, values: s.motion!, longRange, height: 110, anomalies: dots("motion", s.motion), xMax })
+        ? motionOption({ theme, ts, values: s.motion!, longRange, height: 110, anomalies: dots("motion", s.motion), xMax })
         : null,
-      bed: hasData(s.in_bed) ? inBedOption({ ts, values: s.in_bed!, longRange, height: 70, xMax }) : null,
+      bed: hasData(s.in_bed) ? inBedOption({ theme, ts, values: s.in_bed!, longRange, height: 70, xMax }) : null,
       snowflake: { buckets: a.length, flagged, stepMin: Math.round(step / 60_000), bucketMin: BUCKET_MS / 60_000 },
       forecast: fc ? { fc, hr: !!fHr, rr: !!fRr, spo2: !!fSpo2 } : null,
     };
-  }, [data, anomalies, forecasts, baselines, copd, range, liveHr, fetchedAt, replayEnd, cursor]);
+  }, [data, anomalies, forecasts, baselines, copd, range, liveHr, fetchedAt, replayEnd, cursor, theme]);
 
   const group = `resident-${residentId}`;
-  const usual = <LegendSwatch color={BAND} label={`${pronoun} usual range (p05–p95)`} band />;
+  const usual = <LegendSwatch color="var(--band)" label={`${pronoun} usual range (p05–p95)`} band />;
   const sf = charts?.snowflake.buckets ? (
     <>
-      <LegendSwatch color={EXPECTED} label="Snowflake expected (99 %)" band />
+      <LegendSwatch color={pal.expected} label="Snowflake expected (99 %)" band />
       <AnomalySwatch />
     </>
   ) : null;
-  const fcLegend = <ForecastSwatch />;
+  const fcLegend = <ForecastSwatch pal={pal} />;
   const fc = charts?.forecast ?? null;
 
   return (
-    <section aria-labelledby="vitals-heading" className="space-y-4 rounded-2xl bg-card p-4 ring-1 ring-white/10">
+    <section aria-labelledby="vitals-heading" className="space-y-4 vg-card p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="vitals-heading" className="flex items-center gap-2 text-xl font-semibold">
+        <h2 id="vitals-heading" className="flex items-center gap-2 text-xl font-bold">
           Vitals {loading && <Loader2 className="size-5 animate-spin text-muted-foreground" aria-label="Loading" />}
         </h2>
-        <div role="group" aria-label="Time range" className="flex rounded-xl bg-white/5 p-1">
+        <div role="group" aria-label="Time range" className="flex rounded-xl bg-surface-2 p-1">
           {(Object.keys(RANGES) as RangeKey[]).map((k) => (
             <button
               key={k}
@@ -192,8 +133,8 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
               aria-pressed={range === k}
               onClick={() => setRange(k)}
               className={cn(
-                "h-11 min-w-16 rounded-lg px-4 text-base font-medium",
-                range === k ? "bg-white/15 text-foreground" : "text-muted-foreground hover:text-foreground",
+                "h-11 min-w-16 rounded-lg px-4 text-base ",
+                range === k ? "bg-surface font-bold text-foreground shadow-[var(--shadow)]" : "text-muted-foreground hover:text-foreground",
               )}
             >
               {RANGES[k].label}
@@ -202,7 +143,7 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
         </div>
       </div>
       {error && (
-        <p className="rounded-lg bg-red-500/10 p-3 text-base text-red-100" role="alert">
+        <p className="rounded-lg bg-crit-bg p-3 text-base text-crit" role="alert">
           {error}
         </p>
       )}
@@ -222,12 +163,12 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
             legend={
               <span className="flex flex-wrap gap-3">
                 {polar && replayEnd === null && now !== null && now - polar.receivedAt < 5000 && (
-                  <span className="flex items-center gap-1.5 text-sm font-medium text-rose-200">
-                    <span className="size-2 animate-pulse rounded-full bg-rose-400" aria-hidden />
+                  <span className="flex items-center gap-1.5 text-sm text-accent">
+                    <span className="size-2 animate-pulse rounded-full bg-accent" aria-hidden />
                     Polar live{typeof polar.hr === "number" ? ` · ${polar.hr} bpm` : ""}
                   </span>
                 )}
-                <LegendSwatch color={LINE} label="Heart rate" />
+                <LegendSwatch color="var(--text)" label="Heart rate" />
                 {usual}
                 {sf}
                 {fc?.hr && fcLegend}
@@ -259,9 +200,9 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
             option={charts.spo2}
             legend={
               <span className="flex flex-wrap gap-3">
-                <LegendSwatch color={ZONE[1]} label="+1" band />
-                <LegendSwatch color={ZONE[2]} label="+2" band />
-                <LegendSwatch color={ZONE[3]} label="+3" band />
+                <LegendSwatch color={pal.zone[1]} label="NEWS2 +1" band />
+                <LegendSwatch color={pal.zone[2]} label="+2" band />
+                <LegendSwatch color={pal.zone[3]} label="+3" band />
                 {fc?.spo2 && fcLegend}
               </span>
             }
@@ -286,7 +227,7 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
             Source: Tiger {data?.res === "1h" ? "vitals_1h" : data?.res === "15m" ? "vitals_15m" : "vitals_1m"} continuous
             aggregate · gap-filled with locf.{" "}
             {charts.snowflake.buckets > 0
-              ? `Expected range and ◆ from Snowflake ANOMALY_DETECTION on closed 15-min buckets (${charts.snowflake.flagged} of ${charts.snowflake.buckets} flagged in this range).`
+              ? `Expected range and dots from Snowflake ANOMALY_DETECTION on closed 15-min buckets (${charts.snowflake.flagged} of ${charts.snowflake.buckets} flagged in this range).`
               : "Snowflake anomaly results: none for this range yet."}
           </p>
         </div>
@@ -295,12 +236,12 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
   );
 }
 
-function ForecastSwatch() {
+function ForecastSwatch({ pal }: { pal: (typeof PALETTES)["night"] }) {
   return (
     <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
       <svg width="22" height="10" aria-hidden className="shrink-0">
-        <rect x="0" y="1" width="22" height="8" rx="2" fill={FORECAST_BAND} />
-        <line x1="1" y1="5" x2="21" y2="5" stroke={FORECAST} strokeWidth="2" strokeDasharray="4 3" />
+        <rect x="0" y="1" width="22" height="8" rx="2" fill={pal.forecastBand} />
+        <line x1="1" y1="5" x2="21" y2="5" stroke={pal.forecast} strokeWidth="2" strokeDasharray="4 3" />
       </svg>
       Snowflake forecast (90 %)
     </span>
@@ -313,12 +254,12 @@ function ForecastCallout({ fc }: { fc: Forecast }) {
     <div
       className={cn(
         "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-3 py-2 text-base ring-1",
-        fc.callout ? "bg-amber-500/12 text-amber-50 ring-amber-400/40" : "bg-white/5 text-muted-foreground ring-white/10",
+        fc.callout ? "bg-high-bg text-high ring-high-solid" : "bg-surface-2 text-muted-foreground ring-line",
       )}
       role="status"
     >
-      <TrendingUp className="size-5 shrink-0 text-amber-300" aria-hidden />
-      <span className="font-semibold">{fc.callout ?? "Forecast: no NEWS2 3-point threshold crossed within 4 h"}</span>
+      <TrendingUp className="size-5 shrink-0 text-high" aria-hidden />
+      <span className="font-bold">{fc.callout ?? "Forecast: no NEWS2 3-point threshold crossed within 4 h"}</span>
       <span className="text-sm text-muted-foreground">
         Snowflake ML.FORECAST · made {facilityHHMM(Date.parse(fc.as_of))} from the last {fc.train_hours} h · dashed line = next 2 h
       </span>
@@ -329,10 +270,8 @@ function ForecastCallout({ fc }: { fc: Forecast }) {
 function AnomalySwatch() {
   return (
     <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
-      <span aria-hidden style={{ color: ANOMALY }}>
-        ◆
-      </span>
-      Outside expected (Snowflake)
+      <span aria-hidden className="size-2.5 rounded-full bg-high-solid" />
+      Unusual for this resident (Snowflake)
     </span>
   );
 }

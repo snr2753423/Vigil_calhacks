@@ -1,10 +1,11 @@
 "use client";
 
 import ReactEChartsCore from "echarts-for-react/esm/core";
-import { BadgeCheck, Code2, Loader2, MessageCircleQuestion, Send, Sparkles } from "lucide-react";
+import { BadgeCheck, Code2, Loader2, MessageCircleQuestion, Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "cn";
 
+import { useTheme } from "@/hooks/use-theme";
 import { askChartOption, formatCell, prettyColumn } from "@/lib/ask";
 import { getJSON, postJSON } from "@/lib/api";
 import { facilityHHMM } from "@/lib/format";
@@ -59,7 +60,7 @@ export function AskView() {
   return (
     <main className="mx-auto flex w-full max-w-[72rem] flex-1 flex-col gap-4 px-3 py-4 sm:px-4">
       <header className="space-y-1">
-        <h1 className="flex items-center gap-2 text-2xl font-semibold">
+        <h1 className="flex items-center gap-2 text-2xl font-bold">
           <MessageCircleQuestion className="size-6" aria-hidden /> Ask the facility
         </h1>
         <p className="text-base text-muted-foreground">
@@ -75,7 +76,7 @@ export function AskView() {
             type="button"
             disabled={busy}
             onClick={() => ask(s)}
-            className="min-h-11 rounded-full bg-white/5 px-4 py-2 text-left text-base ring-1 ring-white/10 hover:bg-white/10 disabled:opacity-50"
+            className="min-h-11 rounded-full bg-surface-2 px-4 py-2 text-left text-base border border-line hover:bg-surface-2 disabled:opacity-50"
           >
             {s}
           </button>
@@ -85,11 +86,11 @@ export function AskView() {
       <div className="space-y-4">
         {turns.map((t) => (
           <article key={t.id} className="space-y-3">
-            <p className="ml-auto w-fit max-w-[90%] rounded-2xl bg-teal-500/15 px-4 py-2.5 text-base text-teal-50 ring-1 ring-teal-400/30">
+            <p className="ml-auto w-fit max-w-[90%] rounded-2xl bg-surface-2 px-4 py-2.5 text-base text-accent ring-1 ring-accent">
               {t.question}
             </p>
             {t.error ? (
-              <p className="rounded-xl bg-red-500/15 px-4 py-3 text-base text-red-100" role="alert">
+              <p className="rounded-xl bg-crit-bg px-4 py-3 text-base text-crit" role="alert">
                 {t.error}
               </p>
             ) : t.result ? (
@@ -105,7 +106,7 @@ export function AskView() {
       </div>
 
       <form
-        className="sticky bottom-3 mt-auto flex gap-2 rounded-2xl bg-card p-2 ring-1 ring-white/15"
+        className="sticky bottom-3 mt-auto flex gap-2 vg-card p-2"
         onSubmit={(e) => {
           e.preventDefault();
           void ask(question);
@@ -125,7 +126,7 @@ export function AskView() {
         <button
           type="submit"
           disabled={busy || question.trim().length < 3}
-          className="flex h-12 items-center gap-2 rounded-xl bg-teal-500/20 px-5 text-base font-semibold text-teal-50 ring-1 ring-teal-400/50 hover:bg-teal-500/30 disabled:opacity-50"
+          className="flex h-12 items-center gap-2 rounded-xl bg-surface-2 px-5 text-base font-bold text-accent ring-1 ring-accent hover:bg-surface-2 disabled:opacity-50"
         >
           {busy ? <Loader2 className="size-5 animate-spin" aria-hidden /> : <Send className="size-5" aria-hidden />}
           Ask
@@ -136,12 +137,13 @@ export function AskView() {
 }
 
 function Answer({ r, onSuggest }: { r: AskResult; onSuggest: (q: string) => void }) {
-  const chart = askChartOption(r);
+  const { theme } = useTheme();
+  const chart = askChartOption(r, theme);
   const interpretation = r.interpretation.replace(/^This is our interpretation of your question:\s*/i, "").trim();
   return (
-    <section className="space-y-3 rounded-2xl bg-card p-4 ring-1 ring-white/10">
+    <section className="space-y-3 vg-card p-5">
       {r.fallback && (
-        <p className="rounded-lg bg-amber-500/10 p-3 text-base text-amber-100 ring-1 ring-amber-400/30" role="status">
+        <p className="rounded-lg bg-high-bg p-3 text-base text-high ring-1 ring-high-solid" role="status">
           Snowflake Cortex Analyst is unreachable right now, so this is the last answer it gave to this question
           {r.fallback.answered_at ? ` (${facilityHHMM(Date.parse(r.fallback.answered_at))})` : ""}.
         </p>
@@ -153,7 +155,7 @@ function Answer({ r, onSuggest }: { r: AskResult; onSuggest: (q: string) => void
         </p>
       )}
       {r.verified_query && (
-        <p className="flex items-center gap-1.5 text-sm text-emerald-200">
+        <p className="flex items-center gap-1.5 text-sm text-stable">
           <BadgeCheck className="size-4" aria-hidden /> Answered with the verified query “{r.verified_query.question}”
         </p>
       )}
@@ -162,7 +164,7 @@ function Answer({ r, onSuggest }: { r: AskResult; onSuggest: (q: string) => void
           <p className="text-sm text-muted-foreground">Did you mean:</p>
           <div className="flex flex-wrap gap-2">
             {r.suggestions.map((s) => (
-              <button key={s} type="button" onClick={() => onSuggest(s)} className="min-h-10 rounded-full bg-white/5 px-3 py-1.5 text-left text-base ring-1 ring-white/10 hover:bg-white/10">
+              <button key={s} type="button" onClick={() => onSuggest(s)} className="min-h-10 rounded-full bg-surface-2 px-3 py-1.5 text-left text-base border border-line hover:bg-surface-2">
                 {s}
               </button>
             ))}
@@ -170,7 +172,7 @@ function Answer({ r, onSuggest }: { r: AskResult; onSuggest: (q: string) => void
         </div>
       )}
       {r.error && (
-        <p className="rounded-lg bg-red-500/10 p-3 text-base text-red-100" role="alert">
+        <p className="rounded-lg bg-crit-bg p-3 text-base text-crit" role="alert">
           {r.error}
         </p>
       )}
@@ -195,15 +197,15 @@ function Answer({ r, onSuggest }: { r: AskResult; onSuggest: (q: string) => void
         </>
       )}
       {r.sql && (
-        <details className="rounded-xl bg-white/[0.03] p-3 ring-1 ring-white/10">
-          <summary className="flex cursor-pointer items-center gap-2 text-sm font-medium text-muted-foreground">
+        <details className="rounded-xl bg-surface-2 p-3 border border-line">
+          <summary className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
             <Code2 className="size-4" aria-hidden /> SQL from Cortex Analyst
           </summary>
-          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap font-mono text-sm text-slate-200">{r.sql}</pre>
+          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap font-mono text-sm text-muted-foreground">{r.sql}</pre>
         </details>
       )}
       <p className="flex flex-wrap items-center gap-x-2 text-sm text-muted-foreground">
-        <Sparkles className="size-4" aria-hidden /> Snowflake Cortex Analyst REST · {(r.analyst_ms / 1000).toFixed(1)} s
+        <Code2 className="size-4" aria-hidden /> Snowflake Cortex Analyst REST · {(r.analyst_ms / 1000).toFixed(1)} s
         {r.exec_ms !== undefined && ` · SQL API ${(r.exec_ms / 1000).toFixed(1)} s`}
         {r.models.length > 0 && ` · ${r.models.join(", ")}`}
       </p>
@@ -214,16 +216,16 @@ function Answer({ r, onSuggest }: { r: AskResult; onSuggest: (q: string) => void
 function ResultTable({ r }: { r: AskResult }) {
   if (!r.columns.length) return null;
   if (!r.rows.length) {
-    return <p className="rounded-lg bg-white/[0.03] p-3 text-base text-muted-foreground">No rows: nothing matched in the data.</p>;
+    return <p className="rounded-lg bg-surface-2 p-3 text-base text-muted-foreground">No rows: nothing matched in the data.</p>;
   }
   const numeric = (t: string) => t === "fixed" || t === "real";
   return (
-    <div className="max-h-[28rem] overflow-auto rounded-xl ring-1 ring-white/10">
+    <div className="max-h-[28rem] overflow-auto rounded-xl border border-line">
       <table className="w-full border-collapse text-left text-base">
         <thead className="sticky top-0 bg-card text-sm text-muted-foreground">
           <tr>
             {r.columns.map((c) => (
-              <th key={c.name} className={cn("border-b border-white/10 px-3 py-2 font-medium", numeric(c.type) && "text-right")}>
+              <th key={c.name} className={cn("border-b border-line px-3 py-2 ", numeric(c.type) && "text-right")}>
                 {prettyColumn(c.name)}
               </th>
             ))}
@@ -231,9 +233,9 @@ function ResultTable({ r }: { r: AskResult }) {
         </thead>
         <tbody>
           {r.rows.map((row, i) => (
-            <tr key={i} className="border-b border-white/5">
+            <tr key={i} className="border-b border-line">
               {row.map((v, j) => (
-                <td key={j} className={cn("px-3 py-1.5", numeric(r.columns[j].type) && "text-right font-mono tabular-nums")}>
+                <td key={j} className={cn("px-3 py-1.5", numeric(r.columns[j].type) && "text-right tabular-nums")}>
                   {formatCell(v, r.columns[j].type)}
                 </td>
               ))}

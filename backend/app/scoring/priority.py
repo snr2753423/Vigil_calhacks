@@ -157,6 +157,7 @@ class PriorityResult:
     device: RuleHit | None
     concern: NoteConcern | None
     deviations: dict[str, MetricDeviation]
+    exits_usual: float | None = None  # this resident's night bed-exit p95 (plain-language wording)
 
     @property
     def rule(self) -> RuleHit | None:
@@ -316,7 +317,8 @@ def compute(
     rules, device = evaluate_rules(f, p, baselines, clock)
     score = final_score(c, rules, device, news)
     factors = top_factors(p, f, c, news, devs, rules, device, concern, block, clock, behavior)
-    return PriorityResult(rid, score, tier_for_score(score), c, factors, news, rules, device, concern, devs)
+    return PriorityResult(rid, score, tier_for_score(score), c, factors, news, rules, device, concern, devs,
+                          behavior.night_bed_exits_p95)  # fmt: skip
 
 
 # --------------------------------------------------------------------------- factor text

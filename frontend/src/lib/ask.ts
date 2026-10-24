@@ -1,15 +1,16 @@
 // Ask the facility: an ECharts option from a Cortex Analyst result's shape (the backend picks the chart type).
 import type { EChartsOption } from "echarts";
 
-import { INK, LINE } from "@/lib/chart-options";
+import { type ChartPalette, type ChartTheme, PALETTES } from "@/lib/chart-options";
 import { TIERS } from "@/lib/tiers";
 import type { AskResult, Tier } from "@/lib/types";
 
-const PALETTE = ["#5eead4", "#a5b4fc", "#fcd34d", "#f0abfc", "#93c5fd", "#fca5a5"];
-
-/** Colour per series value: tier colours for tiers, else a fixed palette. */
-export function seriesColor(name: string, i: number): string {
-  return (TIERS as Record<string, { hex: string }>)[name as Tier]?.hex ?? PALETTE[i % PALETTE.length];
+/** Colour per series value: tier colours for tiers, else the theme's categorical palette. */
+export function seriesColor(name: string, i: number, theme: ChartTheme = "night"): string {
+  const tier = (TIERS as Record<string, { hex: string; dayHex: string }>)[name as Tier];
+  if (tier) return theme === "day" ? tier.dayHex : tier.hex;
+  const pal: ChartPalette = PALETTES[theme];
+  return pal.series[i % pal.series.length];
 }
 
 export function prettyColumn(name: string): string {
@@ -19,7 +20,8 @@ export function prettyColumn(name: string): string {
 
 export type AskChartSpec = { option: EChartsOption; series: { name: string; color: string }[]; height: number };
 
-export function askChartOption(r: AskResult): AskChartSpec | null {
+export function askChartOption(r: AskResult, theme: ChartTheme = "night"): AskChartSpec | null {
+  const pal = PALETTES[theme];
   const c = r.chart;
   if (!c || !r.rows.length) return null;
   const col = (name: string) => r.columns.findIndex((x) => x.name === name);
@@ -33,7 +35,7 @@ export function askChartOption(r: AskResult): AskChartSpec | null {
   const series = groups.map((g, i) => {
     const byX = new Map<string, number | null>();
     for (const row of r.rows) if (si < 0 || String(row[si]) === g) byX.set(String(row[xi]), num(row[yi]));
-    const color = si >= 0 ? seriesColor(g, i) : LINE;
+    const color = si >= 0 ? seriesColor(g, i, theme) : pal.series[0];
     return {
       name: g,
       type: c.type,
@@ -49,17 +51,17 @@ export function askChartOption(r: AskResult): AskChartSpec | null {
   });
   const horizontal = c.type === "bar" && si < 0 && xs.length > 6;
   const height = horizontal ? Math.max(180, xs.length * 26 + 40) : 240;
-  const cat = { type: "category" as const, data: xs, axisLabel: { color: INK.muted, fontSize: 12, interval: 0, hideOverlap: true }, axisLine: { lineStyle: { color: INK.axis } }, axisTick: { show: false } };
-  const val = { type: "value" as const, axisLabel: { color: INK.muted, fontSize: 12 }, splitLine: { lineStyle: { color: INK.grid } }, scale: c.type === "line" };
+  const cat = { type: "category" as const, data: xs, axisLabel: { color: pal.muted, fontSize: 12, interval: 0, hideOverlap: true }, axisLine: { lineStyle: { color: pal.axis } }, axisTick: { show: false } };
+  const val = { type: "value" as const, axisLabel: { color: pal.muted, fontSize: 12 }, splitLine: { lineStyle: { color: pal.grid } }, scale: c.type === "line" };
   const option: EChartsOption = {
     animation: false,
     grid: { left: horizontal ? 140 : 52, right: 16, top: 12, bottom: horizontal ? 24 : 40 },
     tooltip: {
       trigger: "axis",
       axisPointer: { type: c.type === "bar" ? "shadow" : "line" },
-      backgroundColor: "#1e293b",
-      borderColor: "rgba(255,255,255,0.12)",
-      textStyle: { color: "#e2e8f0", fontSize: 13 },
+      backgroundColor: pal.tooltipBg,
+      borderColor: pal.tooltipBorder,
+      textStyle: { color: pal.tooltipText, fontSize: 14 },
     },
     xAxis: horizontal ? val : cat,
     yAxis: horizontal ? { ...cat, inverse: true, axisLabel: { ...cat.axisLabel, width: 130, overflow: "truncate" as const } } : val,

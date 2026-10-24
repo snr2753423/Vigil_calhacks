@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, Loader2, Play, Sparkles } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, Play, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { cn } from "cn";
 
@@ -62,15 +62,15 @@ export function ReplayPanel() {
   return (
     <Panel title="Replay last night">
       {msg && (
-        <p role="status" className={cn("mb-3 rounded-xl px-4 py-3 text-base", msg.ok ? "bg-emerald-500/15 text-emerald-100" : "bg-red-500/15 text-red-100")}>
+        <p role="status" className={cn("mb-3 rounded-xl px-4 py-3 text-base", msg.ok ? "bg-stable-bg text-stable" : "bg-crit-bg text-crit")}>
           {msg.text}
         </p>
       )}
-      {error && !status && <p className="text-base text-red-200">{error}</p>}
+      {error && !status && <p className="text-base text-crit">{error}</p>}
       {status && (
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="space-y-3">
-            <h3 className="text-lg font-semibold">1 · Prepare</h3>
+            <h3 className="text-lg font-bold">1 · Prepare</h3>
             <p className="text-base text-muted-foreground">
               Precomputes everything the replay reveals, so it never waits on Snowflake: anomaly detection over the
               night, AI_EXTRACT on its nurse notes, the gated scoring pass, forecasts where live would ask for them,
@@ -80,7 +80,7 @@ export function ReplayPanel() {
               <PreparedSummary status={status} />
             ) : (
               !running && (
-                <p className="flex items-start gap-2 rounded-xl bg-amber-500/15 px-4 py-3 text-base text-amber-50 ring-1 ring-amber-300/40">
+                <p className="flex items-start gap-2 rounded-xl bg-high-bg px-4 py-3 text-base text-high ring-1 ring-high-solid">
                   <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden />
                   Run Prepare replay first: the replay needs its cached Snowflake results and AI cards.
                 </p>
@@ -88,7 +88,7 @@ export function ReplayPanel() {
             )}
             {prep && (running || prep.phase === "error") && <Progress p={prep} />}
             <div className="flex flex-wrap items-center gap-3">
-              <BigButton icon={running ? Loader2 : Sparkles} tone={prepared ? "default" : "teal"} disabled={running} onClick={startPrepare}>
+              <BigButton icon={running ? Loader2 : RefreshCw} tone={prepared ? "default" : "teal"} disabled={running} onClick={startPrepare}>
                 {running ? "Preparing…" : prepared ? "Prepare again" : "Prepare replay"}
               </BigButton>
               <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -107,7 +107,7 @@ export function ReplayPanel() {
           </div>
 
           <div className="space-y-3">
-            <h3 className="text-lg font-semibold">2 · Play</h3>
+            <h3 className="text-lg font-bold">2 · Play</h3>
             {status.night && (
               <p className="text-base text-muted-foreground">
                 Night of {status.night.date}: {facilityDayHHMM(Date.parse(status.night.start))} →{" "}
@@ -117,8 +117,8 @@ export function ReplayPanel() {
             {status.active ? (
               <>
                 <p className="text-base">
-                  <span className="font-semibold text-violet-100">Replaying</span> · at{" "}
-                  <span className="font-mono">{now === null ? "--:--" : facilityHHMM(now)}</span>
+                  <span className="font-bold text-foreground">Replaying</span> · at{" "}
+                  <span className="tabular-nums">{now === null ? "--:--" : facilityHHMM(now)}</span>
                   {status.at_end && " · end of the night"}
                 </p>
                 <PlaybackButtons onResult={report} />
@@ -138,7 +138,7 @@ export function ReplayPanel() {
                     onChange={(e) => setFrom(e.target.value)}
                     inputMode="numeric"
                     placeholder="HH:MM"
-                    className="h-12 w-28 rounded-lg border border-input bg-background/60 px-3 font-mono text-lg text-foreground"
+                    className="h-12 w-28 rounded-lg border border-input bg-background/60 px-3 text-lg text-foreground"
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-sm text-muted-foreground">
@@ -160,7 +160,7 @@ export function ReplayPanel() {
                 </BigButton>
               </form>
             )}
-            <h4 className="pt-1 text-base font-semibold">Bookmarks</h4>
+            <h4 className="pt-1 text-base font-bold">Bookmarks</h4>
             {prepared ? (
               <BookmarkButtons bookmarks={status.bookmarks} cursor={status.active && status.cursor ? Date.parse(status.cursor) : null} onResult={report} />
             ) : (
@@ -185,8 +185,8 @@ function PreparedSummary({ status }: { status: ReplayStatus }) {
   const d = p.detection;
   const a = p.assessments_summary;
   return (
-    <div className="space-y-2 rounded-xl bg-white/[0.04] p-3 ring-1 ring-white/10">
-      <p className="flex items-center gap-2 text-base text-emerald-100">
+    <div className="space-y-2 rounded-xl bg-surface-2 p-3 border border-line">
+      <p className="flex items-center gap-2 text-base text-stable">
         <CheckCircle2 className="size-5" aria-hidden /> Prepared {facilityDayHHMM(Date.parse(p.prepared_at))} in{" "}
         {Math.round(p.seconds)} s
       </p>
@@ -210,14 +210,14 @@ function PreparedSummary({ status }: { status: ReplayStatus }) {
 function Progress({ p }: { p: PrepareProgress }) {
   const pct = p.total ? Math.round((p.step / p.total) * 100) : null;
   return (
-    <div className="space-y-1.5 rounded-xl bg-white/[0.04] p-3 ring-1 ring-white/10" role="status">
-      <p className={cn("flex items-center gap-2 text-base", p.phase === "error" ? "text-red-200" : "text-foreground")}>
+    <div className="space-y-1.5 rounded-xl bg-surface-2 p-3 border border-line" role="status">
+      <p className={cn("flex items-center gap-2 text-base", p.phase === "error" ? "text-crit" : "text-foreground")}>
         {p.phase !== "error" && <Loader2 className="size-4 animate-spin" aria-hidden />} {PHASES[p.phase]}
-        {pct !== null && p.phase !== "error" && <span className="font-mono text-sm text-muted-foreground">{p.step}/{p.total}</span>}
+        {pct !== null && p.phase !== "error" && <span className="text-sm text-muted-foreground tabular-nums">{p.step}/{p.total}</span>}
       </p>
       {pct !== null && p.phase !== "error" && (
-        <div className="h-2 overflow-hidden rounded-full bg-white/10">
-          <div className="h-full bg-teal-300 transition-[width]" style={{ width: `${pct}%` }} />
+        <div className="h-2 overflow-hidden rounded-full bg-surface-2">
+          <div className="h-full bg-accent transition-[width]" style={{ width: `${pct}%` }} />
         </div>
       )}
       <p className="text-sm text-muted-foreground">{p.error ?? p.message}</p>

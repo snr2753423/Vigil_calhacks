@@ -11,7 +11,7 @@ const ROWS: { key: keyof News2["params"]; label: string; unit: string; source: s
   { key: "consciousness", label: "Consciousness", unit: "", source: "nurse note" },
 ];
 
-const POINTS_CLASS = ["", "bg-amber-300/20 text-amber-100", "bg-orange-400/25 text-orange-100", "bg-red-500/25 text-red-100"];
+const POINTS_CLASS = ["", "bg-high-bg text-high", "bg-high-bg text-high", "bg-crit-bg text-crit"];
 
 function fmt(key: string, v: number | boolean, unit: string): string {
   if (key === "consciousness") return v ? "New confusion" : "Alert";
@@ -21,12 +21,12 @@ function fmt(key: string, v: number | boolean, unit: string): string {
 /** NEWS2 subset with the inputs Vigil has (SPEC §7b); missing inputs score nothing and say so. */
 export function News2Table({ n }: { n: News2 }) {
   return (
-    <section aria-labelledby="news2-heading" className="space-y-2 rounded-2xl bg-card p-4 ring-1 ring-white/10">
-      <h2 id="news2-heading" className="flex items-baseline justify-between text-xl font-semibold">
+    <section aria-labelledby="news2-heading" className="space-y-2 vg-card p-5">
+      <h2 id="news2-heading" className="flex items-baseline justify-between text-xl font-bold">
         NEWS2
-        <span className="font-mono text-2xl tabular-nums">
+        <span className="text-2xl tabular-nums">
           {n.total}
-          {n.forces_high && <span className="ml-2 align-middle text-sm font-sans text-orange-200">at least High</span>}
+          {n.forces_high && <span className="ml-2 align-middle text-sm font-sans text-high">at least High</span>}
         </span>
       </h2>
       <p className="text-sm text-muted-foreground">
@@ -42,7 +42,7 @@ export function News2Table({ n }: { n: News2 }) {
             <th className="py-1 text-right font-normal">Points</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-white/5">
+        <tbody className="divide-y divide-line">
           {ROWS.map((r) => {
             const p = n.params[r.key];
             return (
@@ -51,12 +51,12 @@ export function News2Table({ n }: { n: News2 }) {
                   {r.label}
                   <span className="block text-xs text-muted-foreground">{r.source}</span>
                 </th>
-                <td className="py-2 font-mono tabular-nums">
+                <td className="py-2 tabular-nums">
                   {p ? fmt(r.key, p.value, r.unit) : <span className="font-sans text-muted-foreground">— no reading</span>}
                 </td>
                 <td className="py-2 text-right">
                   {p ? (
-                    <span className={cn("inline-block min-w-8 rounded-md px-2 py-0.5 text-center font-mono", POINTS_CLASS[p.points])}>
+                    <span className={cn("inline-block min-w-8 rounded-md px-2 py-0.5 text-center tabular-nums", POINTS_CLASS[p.points])}>
                       {p.points}
                     </span>
                   ) : (

@@ -134,17 +134,17 @@ export function DemoShortcuts() {
   return (
     <>
       {open && (
-        <div className="fixed inset-0 z-[60] flex items-start justify-center bg-black/50 p-4 pt-[10vh]" onClick={() => setOpen(false)}>
+        <div className="fixed inset-0 z-[60] flex items-start justify-center bg-background/80 p-4 pt-[10vh]" onClick={() => setOpen(false)}>
           <section
             role="dialog"
             aria-label="Demo shortcuts"
             onClick={(e) => e.stopPropagation()}
-            className="max-h-[80vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-border/60 bg-popover p-5 shadow-2xl"
+            className="max-h-[80vh] w-full max-w-xl overflow-y-auto vg-card p-5"
           >
             <header className="mb-3 flex items-center gap-2">
-              <Keyboard className="size-5 text-teal-300" aria-hidden />
-              <h2 className="text-lg font-semibold">Demo shortcuts</h2>
-              <button type="button" onClick={() => setOpen(false)} className="ml-auto flex size-9 items-center justify-center rounded-lg hover:bg-white/10">
+              <Keyboard className="size-5 text-accent" aria-hidden />
+              <h2 className="text-lg font-bold">Demo shortcuts</h2>
+              <button type="button" onClick={() => setOpen(false)} className="ml-auto flex size-11 items-center justify-center rounded-[10px] hover:bg-surface-2">
                 <X className="size-5" aria-hidden />
                 <span className="sr-only">Close</span>
               </button>
@@ -153,21 +153,21 @@ export function DemoShortcuts() {
               {SHORTCUTS.map((s) => (
                 <div key={s.keys} className="contents">
                   <dt>
-                    <kbd className="rounded-md bg-white/10 px-2 py-0.5 font-mono text-sm">{s.keys}</kbd>
+                    <kbd className="rounded-md bg-surface-2 px-2 py-0.5 font-mono text-sm">{s.keys}</kbd>
                   </dt>
                   <dd className="text-muted-foreground">{s.label}</dd>
                 </div>
               ))}
             </dl>
-            <h3 className="mt-4 mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Bookmarks</h3>
+            <h3 className="mt-4 mb-2 text-sm font-bold uppercase tracking-wide text-muted-foreground">Bookmarks</h3>
             {bookmarks.length === 0 ? (
               <p className="text-sm text-muted-foreground">No recorded night yet (run Prepare replay).</p>
             ) : (
               <ol className="space-y-1 text-base">
                 {bookmarks.map((b, i) => (
                   <li key={b.ts + b.label} className="flex gap-3">
-                    <kbd className="rounded-md bg-white/10 px-2 py-0.5 font-mono text-sm">{i + 1}</kbd>
-                    <span className="font-mono tabular-nums">{facilityHHMM(Date.parse(b.ts))}</span>
+                    <kbd className="rounded-md bg-surface-2 px-2 py-0.5 font-mono text-sm">{i + 1}</kbd>
+                    <span className="tabular-nums">{facilityHHMM(Date.parse(b.ts))}</span>
                     <span>{b.label}</span>
                   </li>
                 ))}
@@ -181,8 +181,8 @@ export function DemoShortcuts() {
           key={toast.at}
           role="status"
           className={cn(
-            "fixed bottom-4 left-4 z-[70] rounded-full px-4 py-2 text-base font-medium shadow-lg ring-1",
-            toast.ok ? "bg-slate-900/95 text-slate-100 ring-white/15" : "bg-red-950/95 text-red-100 ring-red-400/40",
+            "fixed bottom-4 left-4 z-[70] rounded-full px-4 py-2 text-base shadow-[var(--shadow)] ring-1",
+            toast.ok ? "bg-surface-2 text-foreground ring-line" : "bg-crit-bg text-crit ring-crit-solid",
           )}
         >
           {toast.text}

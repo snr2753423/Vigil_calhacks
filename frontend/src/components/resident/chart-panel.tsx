@@ -21,7 +21,7 @@ export function ChartPanel({ title, hint, legend, option, height, group, empty =
   return (
     <figure className="space-y-1">
       <figcaption className="flex flex-wrap items-baseline justify-between gap-x-3 px-1">
-        <span className="text-base font-semibold">
+        <span className="text-base font-bold">
           {title} {hint && <span className="text-sm font-normal text-muted-foreground">{hint}</span>}
         </span>
         {legend}
@@ -41,7 +41,7 @@ export function ChartPanel({ title, hint, legend, option, height, group, empty =
         />
       ) : (
         <div
-          className="flex items-center rounded-lg bg-white/[0.03] px-4 text-base text-muted-foreground"
+          className="flex items-center rounded-lg bg-surface-2 px-4 text-base text-muted-foreground"
           style={{ height: Math.min(height, 64) }}
         >
           {empty}

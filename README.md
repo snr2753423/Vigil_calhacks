@@ -228,6 +228,21 @@ The layout follows SPEC §5. `backend/app/` holds `api/`, `ws/`, `db/` (`tiger.p
 
 ## Status
 
+**Phase 11 (UI redesign: calm, warm, nursing-home friendly): done, verified locally against the 02:14 replay and live mode**
+
+What changed (frontend only, plus one deterministic backend helper; scoring, tiers, thresholds, APIs, Tiger, Snowflake, replay and devices are unchanged):
+- **Tokens from `design/mockup.html`** in `globals.css`: warm low-blue-light night (charcoal + amber) and warm paper day (sage). Atkinson Hyperlegible 400/700, 17 px base, ≥ 44 px targets, no neon, glow, gradients, purple or monospace clock. The mockup's `soft` and day tier colours are under 4.5:1 for small text, so text uses AA "-text" shades (fills, borders and dots keep the exact tokens).
+- **Theme follows the facility clock** (night 21:00–07:00, forced night, replays) with a Day/Night button in the header, remembered per device (`vigil.prefs.theme`; a boot script avoids a flash). ECharts colours come from a day/night palette.
+- **Plain-language reason** (`backend/app/scoring/plain.py`, `plain_reason` on the `/ws/live` card, REST card and alert message; device issues as `task`): the existing top factors as one sentence with the resident's pronoun. Never AI-written; the exact factor strings stay as the small facts line. 13 tests (`tests/test_plain.py`) cover the cast.
+- **Rounds Queue**: summary sentence, one "Check next" card (plain reason, facts, "Worth checking" from the AI card + one care-plan line, "I checked on Rosa" / "Open Rosa's page"), "Keep an eye on" rows, device tasks in words, "N resting as usual · Show all". Cards hold their order for 5 s; a CRITICAL resident moving up interrupts at once (`holdOrder`, tested). Floor plan: rooms on both sides of each hallway, nurses' station between units.
+- **Resident page**: header card with code-status block and emergency contact; Why now → Worth checking at the bedside → From her care plan (verbatim) → If you find a change; "Vitals tonight" (8 h, usual-range band, Snowflake dots). Detailed charts (expected range, forecast, NEWS2 zones), Why this score, NEWS2, the full AI note, About and the timeline sit in **Details** (open on desktop, collapsed on phones).
+- **Other pages** use the same tokens and components; the replay banner is a neutral strip ("Replaying last night through the live system · paused at 2:14 AM"). Role and alert sound moved to the header's settings menu.
+- `demo-video/record.mjs`: the care-plan step scrolls to "From her care plan" (the citations button is gone; quotes are inline).
+
+Verified: `make test` (443 backend + 74 frontend), `make lint`; screenshots of `/`, `/resident/17`, `/resident/120` at 1440 px night/day and 390 px (no horizontal scroll); replay at 02:14 shows Rosa Alvarez in "Check next"; an injected fall raised the CRITICAL toast after 35.6 s, the same as before (impact + 30 s still + one evaluation).
+
+Known issues: R-120's page shows "no signal" until the Polar band / iPhone stream; the floor plan is long on phones (40 rooms × 3 units).
+
 **Phase 10 (deploy, harden, demo assets): done in code, verified locally; the Vultr deploy waits for your server**
 
 What works:

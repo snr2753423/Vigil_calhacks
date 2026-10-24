@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertOctagon, CheckCircle2, ClipboardList, Eye, Loader2, Printer, Sparkles, WatchIcon } from "lucide-react";
+import { AlertOctagon, CheckCircle2, ClipboardList, Eye, Loader2, Printer, WatchIcon } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "cn";
@@ -75,16 +75,16 @@ export function HandoffView() {
 
   return (
     <main className="print-sheet mx-auto w-full max-w-[72rem] flex-1 space-y-4 px-3 py-4 sm:px-4">
-      <div className="print-hide flex flex-wrap items-end gap-3 rounded-2xl bg-card p-4 ring-1 ring-white/10">
+      <div className="print-hide flex flex-wrap items-end gap-3 vg-card p-5">
         <div className="mr-auto">
-          <h1 className="flex items-center gap-2 text-2xl font-semibold">
+          <h1 className="flex items-center gap-2 text-2xl font-bold">
             <ClipboardList className="size-6" aria-hidden /> Shift handoff
           </h1>
           <p className="text-base text-muted-foreground">
             SBAR summary of a shift&apos;s alerts, checks, notes and score changes, written by Snowflake AI_AGG.
           </p>
         </div>
-        <div role="group" aria-label="Shift" className="flex rounded-xl bg-white/5 p-1">
+        <div role="group" aria-label="Shift" className="flex rounded-xl bg-surface-2 p-1">
           {SHIFTS.map((s) => (
             <button
               key={s.key}
@@ -92,8 +92,8 @@ export function HandoffView() {
               aria-pressed={shift === s.key}
               onClick={() => setShift(s.key)}
               className={cn(
-                "h-11 rounded-lg px-4 text-base font-medium",
-                shift === s.key ? "bg-white/15 text-foreground" : "text-muted-foreground hover:text-foreground",
+                "h-11 rounded-lg px-4 text-base ",
+                shift === s.key ? "bg-surface font-bold text-foreground shadow-[var(--shadow)]" : "text-muted-foreground hover:text-foreground",
               )}
             >
               {s.label} <span className="hidden text-sm text-muted-foreground sm:inline">{s.hours}</span>
@@ -116,7 +116,7 @@ export function HandoffView() {
               setShift("night");
               setDate(replayNight);
             }}
-            className="h-11 rounded-xl bg-white/5 px-4 text-base hover:bg-white/10"
+            className="h-11 rounded-xl bg-surface-2 px-4 text-base hover:bg-surface-2"
           >
             Recorded night ({replayNight})
           </button>
@@ -125,16 +125,16 @@ export function HandoffView() {
           type="button"
           onClick={generate}
           disabled={generating || !date}
-          className="flex h-11 items-center gap-2 rounded-xl bg-teal-500/20 px-5 text-base font-semibold text-teal-50 ring-1 ring-teal-400/50 hover:bg-teal-500/30 disabled:opacity-60"
+          className="flex h-11 items-center gap-2 rounded-xl bg-surface-2 px-5 text-base font-bold text-accent ring-1 ring-accent hover:bg-surface-2 disabled:opacity-60"
         >
-          {generating ? <Loader2 className="size-5 animate-spin" aria-hidden /> : <Sparkles className="size-5" aria-hidden />}
+          {generating ? <Loader2 className="size-5 animate-spin" aria-hidden /> : <ClipboardList className="size-5" aria-hidden />}
           {generating ? "Snowflake AI_AGG is writing…" : handoff ? "Generate again" : "Generate"}
         </button>
         {handoff && (
           <button
             type="button"
             onClick={() => window.print()}
-            className="flex h-11 items-center gap-2 rounded-xl bg-white/10 px-4 text-base hover:bg-white/15"
+            className="flex h-11 items-center gap-2 rounded-xl bg-surface-2 px-4 text-base hover:bg-surface-2"
           >
             <Printer className="size-5" aria-hidden /> Print
           </button>
@@ -142,12 +142,12 @@ export function HandoffView() {
       </div>
 
       {error && (
-        <p className="rounded-xl bg-red-500/15 px-4 py-3 text-base text-red-100" role="alert">
+        <p className="rounded-xl bg-crit-bg px-4 py-3 text-base text-crit" role="alert">
           {error}
         </p>
       )}
       {!handoff ? (
-        <div className="flex h-48 items-center justify-center rounded-2xl bg-card text-lg text-muted-foreground ring-1 ring-white/10">
+        <div className="flex h-48 items-center justify-center rounded-2xl bg-card text-lg text-muted-foreground border border-line">
           {loading ? (
             <Loader2 className="size-6 animate-spin" aria-label="Loading" />
           ) : generating ? (
@@ -169,8 +169,8 @@ function HandoffSheet({ h }: { h: Handoff }) {
   const ai = h.model.includes("AI_AGG");
   return (
     <>
-      <header className="space-y-1 rounded-2xl bg-card p-4 ring-1 ring-white/10">
-        <h2 className="text-xl font-semibold">
+      <header className="space-y-1 vg-card p-5">
+        <h2 className="text-xl font-bold">
           {h.shift[0].toUpperCase() + h.shift.slice(1)} shift · {facilityDayHHMM(start)} → {facilityDayHHMM(end)}
           {!h.complete && " (in progress)"}
         </h2>
@@ -178,8 +178,8 @@ function HandoffSheet({ h }: { h: Handoff }) {
           Sunrise Gardens Skilled Nursing Facility · {h.residents_flagged} residents needed attention · generated{" "}
           {facilityDayHHMM(Date.parse(h.generated_at))}
         </p>
-        <p className={cn("flex items-center gap-1.5 text-sm", ai ? "text-muted-foreground" : "text-amber-100")}>
-          <Sparkles className="size-4" aria-hidden />
+        <p className={cn("flex items-center gap-1.5 text-sm", ai ? "text-muted-foreground" : "text-high")}>
+          <ClipboardList className="size-4" aria-hidden />
           {ai
             ? `Snowflake Cortex AI_AGG · ${(h.ms / 1000).toFixed(1)} s · ${h.input_rows.length} shift rows + ${h.sbar_rows ?? 0} resident records`
             : `Deterministic summary (Snowflake unavailable: ${h.fallback_reason ?? "no response"})`}
@@ -195,7 +195,7 @@ function HandoffSheet({ h }: { h: Handoff }) {
         <Section icon={AlertOctagon} title="Critical events" tone="red" empty="No critical events.">
           {h.critical_events.map((c, i) => (
             <li key={i} className="flex gap-3">
-              <span className="w-12 shrink-0 font-mono tabular-nums text-muted-foreground">{c.time}</span>
+              <span className="w-12 shrink-0 tabular-nums text-muted-foreground">{c.time}</span>
               <span>
                 <b>{c.resident}</b> · {c.text}
               </span>
@@ -231,25 +231,25 @@ function HandoffSheet({ h }: { h: Handoff }) {
         ))}
       </Section>
 
-      <section aria-labelledby="sbar-heading" className="space-y-3 rounded-2xl bg-card p-4 ring-1 ring-white/10">
-        <h2 id="sbar-heading" className="text-xl font-semibold">
+      <section aria-labelledby="sbar-heading" className="space-y-3 vg-card p-5">
+        <h2 id="sbar-heading" className="text-xl font-bold">
           By resident (SBAR)
         </h2>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[44rem] border-collapse text-left text-base">
             <thead className="text-sm text-muted-foreground">
-              <tr className="border-b border-white/10">
-                <th className="py-2 pr-3 font-medium">Resident</th>
-                <th className="py-2 pr-3 font-medium">Situation</th>
-                <th className="py-2 pr-3 font-medium">Background</th>
-                <th className="py-2 pr-3 font-medium">Assessment</th>
-                <th className="py-2 font-medium">Recommendation</th>
+              <tr className="border-b border-line">
+                <th className="py-2 pr-3 ">Resident</th>
+                <th className="py-2 pr-3 ">Situation</th>
+                <th className="py-2 pr-3 ">Background</th>
+                <th className="py-2 pr-3 ">Assessment</th>
+                <th className="py-2 ">Recommendation</th>
               </tr>
             </thead>
             <tbody>
               {h.residents.map((r) => (
-                <tr key={r.resident_id} className="border-b border-white/5 align-top">
-                  <td className="py-2 pr-3 font-semibold">
+                <tr key={r.resident_id} className="border-b border-line align-top">
+                  <td className="py-2 pr-3 font-bold">
                     <Link href={`/resident/${r.resident_id}`} className="hover:underline">
                       {r.name}
                     </Link>
@@ -269,11 +269,11 @@ function HandoffSheet({ h }: { h: Handoff }) {
         </div>
       </section>
 
-      <details className="print-hide rounded-2xl bg-card p-4 ring-1 ring-white/10">
-        <summary className="cursor-pointer text-base font-medium">What Snowflake was given ({h.input_rows.length} rows)</summary>
+      <details className="print-hide vg-card p-5">
+        <summary className="cursor-pointer text-base ">What Snowflake was given ({h.input_rows.length} rows)</summary>
         <ol className="mt-3 space-y-2 text-sm text-muted-foreground">
           {h.input_rows.map((r, i) => (
-            <li key={i} className="rounded-lg bg-white/[0.03] p-2 font-mono">
+            <li key={i} className="rounded-lg bg-surface-2 p-2 font-mono">
               {r}
             </li>
           ))}
@@ -288,10 +288,10 @@ function HandoffSheet({ h }: { h: Handoff }) {
 }
 
 const TONES = {
-  red: "text-red-200",
-  amber: "text-amber-200",
-  green: "text-emerald-200",
-  slate: "text-slate-200",
+  red: "text-crit",
+  amber: "text-high",
+  green: "text-stable",
+  slate: "text-muted-foreground",
 } as const;
 
 function Section({
@@ -308,8 +308,8 @@ function Section({
   children: React.ReactNode[];
 }) {
   return (
-    <section className="space-y-2 rounded-2xl bg-card p-4 ring-1 ring-white/10">
-      <h2 className={cn("flex items-center gap-2 text-lg font-semibold", TONES[tone])}>
+    <section className="space-y-2 vg-card p-5">
+      <h2 className={cn("flex items-center gap-2 text-lg font-bold", TONES[tone])}>
         <Icon className="size-5" aria-hidden /> {title}
       </h2>
       {children.length ? <ul className="space-y-2 text-base">{children}</ul> : <p className="text-base text-muted-foreground">{empty}</p>}

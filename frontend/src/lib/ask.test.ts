@@ -20,7 +20,13 @@ describe("askChartOption", () => {
     expect(series.map((s) => s.name)).toEqual(["HIGH", "CRITICAL"]);
     expect(series[0].data).toEqual([2, 1]); // East, West
     expect(series[1].data).toEqual([0, 8]);
-    expect(spec.series[1].color).toBe("#ef4444");
+    expect(spec.series[1].color).toBe("#e8836c"); // night CRITICAL
+    const day = askChartOption(result({
+      columns: [{ name: "UNIT", type: "text" }, { name: "TIER", type: "text" }, { name: "ALERTS", type: "fixed" }],
+      rows: [["West", "CRITICAL", 8]],
+      chart: { type: "bar", x: "UNIT", y: "ALERTS", series: "TIER" },
+    }), "day")!;
+    expect(day.series[0].color).toBe("#b4432f");
   });
   it("draws a line over dates", () => {
     const spec = askChartOption(result({

@@ -66,14 +66,14 @@ export function InjectorPanel({ injections, onDone }: Props) {
           </li>
         ))}
       </ul>
-      <h3 className="mt-4 text-base font-semibold">Active scenarios</h3>
+      <h3 className="mt-4 text-base font-bold">Active scenarios</h3>
       {injections.length === 0 ? (
         <p className="text-base text-muted-foreground">None.</p>
       ) : (
         <ul className="mt-1 space-y-1 text-base">
           {injections.map((i) => (
             <li key={`${i.kind}-${i.resident_id}-${i.start}`}>
-              <span className="font-medium">{i.kind.replace("_", " ")}</span> · {roster[i.resident_id]?.name ?? `R-${i.resident_id}`}
+              <span className="">{i.kind.replace("_", " ")}</span> · {roster[i.resident_id]?.name ?? `R-${i.resident_id}`}
               {now !== null && <span className="text-muted-foreground"> · ends in {formatMinutes((Date.parse(i.end) - now) / 60000)}</span>}
             </li>
           ))}

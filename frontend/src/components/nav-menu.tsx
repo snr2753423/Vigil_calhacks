@@ -36,8 +36,8 @@ function InlineLink({ item }: { item: NavItem }) {
       href={item.href}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "flex h-10 items-center rounded-lg px-3 text-base font-medium",
-        active ? "bg-white/10 text-foreground" : "text-muted-foreground hover:bg-white/5 hover:text-foreground",
+        "flex h-11 items-center rounded-[10px] px-3 text-base",
+        active ? "bg-surface-2 text-foreground" : "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
       )}
     >
       {item.label}
@@ -86,9 +86,9 @@ function Dropdown({ label, items, split, roleLabel, phone = false }: {
           setOpen(!open);
         }}
         className={cn(
-          "flex h-10 items-center gap-1.5 rounded-lg px-3 text-base font-medium",
-          current && !phone ? "bg-white/10 text-foreground" : "text-muted-foreground hover:bg-white/5 hover:text-foreground",
-          phone && "ring-1 ring-input",
+          "flex h-11 items-center gap-1.5 rounded-[10px] px-3 text-base",
+          current && !phone ? "bg-surface-2 text-foreground" : "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
+          phone && "border border-line",
         )}
       >
         {phone && (open ? <X className="size-5" aria-hidden /> : <Menu className="size-5" aria-hidden />)}
@@ -98,14 +98,14 @@ function Dropdown({ label, items, split, roleLabel, phone = false }: {
       {open && (
         <ul
           className={cn(
-            "absolute z-50 mt-1 min-w-64 rounded-xl border border-border/60 bg-popover p-1.5 shadow-xl",
+            "absolute z-50 mt-1 min-w-64 rounded-[14px] border border-line bg-surface p-1.5 shadow-[var(--shadow)]",
             phone ? "left-0" : "right-0",
           )}
         >
           {items.map((n, i) => (
             <li key={n.href}>
               {phone && split !== undefined && (i === 0 || i === split) && (
-                <p className="px-3 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <p className="px-3 pt-2 pb-1 text-sm font-bold uppercase tracking-wide text-muted-foreground">
                   {i === 0 ? `For ${roleLabel}` : "More"}
                 </p>
               )}
@@ -115,10 +115,10 @@ function Dropdown({ label, items, split, roleLabel, phone = false }: {
                 onClick={() => setOpen(false)}
                 className={cn(
                   "flex min-h-12 flex-col justify-center rounded-lg px-3 py-1.5",
-                  isActive(n.href, path) ? "bg-white/10" : "hover:bg-white/5",
+                  isActive(n.href, path) ? "bg-surface-2" : "hover:bg-surface-2",
                 )}
               >
-                <span className="text-base font-medium">{n.label}</span>
+                <span className="text-base font-bold">{n.label}</span>
                 <span className="text-sm text-muted-foreground">{n.hint}</span>
               </Link>
             </li>

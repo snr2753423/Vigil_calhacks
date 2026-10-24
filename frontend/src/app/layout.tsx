@@ -1,21 +1,20 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Atkinson_Hyperlegible } from "next/font/google";
 
 import { AppHeader } from "@/components/app-header";
 import { AlertToasts } from "@/components/alert-toasts";
 import { DemoShortcuts } from "@/components/demo-shortcuts";
 import { LiveSocket } from "@/components/live-socket";
 import { ReplayBanner } from "@/components/replay/replay-banner";
+import { ThemeSync } from "@/components/theme-sync";
+import { THEME_BOOT_SCRIPT } from "@/lib/theme";
 import "./globals.css";
 
-const geistSans = Geist({
+// Atkinson Hyperlegible: designed for low-vision readers; two weights only.
+const sans = Atkinson_Hyperlegible({
   variable: "--font-sans",
   subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+  weight: ["400", "700"],
 });
 
 export const metadata: Metadata = {
@@ -24,16 +23,19 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0d1424",
-  colorScheme: "dark",
+  themeColor: "#1c1916",
 };
 
-// Dark "night shift" theme by default (SPEC §11): less glare on a dim unit.
+// Warm night theme by default (low blue light); it follows the facility clock and a per-device Day/Night toggle.
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`dark ${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+    <html lang="en" data-theme="night" className={`${sans.variable} h-full antialiased`} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+      </head>
       <body className="flex min-h-full flex-col">
         <LiveSocket />
+        <ThemeSync />
         <AppHeader />
         <ReplayBanner />
         {children}

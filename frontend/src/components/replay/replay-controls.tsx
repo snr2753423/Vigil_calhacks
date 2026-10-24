@@ -5,7 +5,7 @@ import { useState } from "react";
 import { cn } from "cn";
 
 import { postJSON } from "@/lib/api";
-import { facilityHHMM } from "@/lib/format";
+import { facilityClock12 } from "@/lib/format";
 import type { Bookmark as BookmarkT, ReplayStatus } from "@/lib/types";
 import { useLiveStore } from "@/store/live";
 
@@ -32,21 +32,39 @@ export function PlaybackButtons({ compact = false, onResult }: { compact?: boole
     setBusy(false);
     onResult?.(r.error ? { ok: false, text: `${label} failed: ${r.error}` } : { ok: true, text: label });
   };
-  const h = compact ? "h-10 px-3 text-sm" : "h-12 px-4 text-base";
   const playing = brief?.playing ?? false;
+  const speed = brief?.speed ?? SPEEDS[1];
+  if (compact) {
+    // The replay strip: Play, one speed chip that steps 30× → 60× → 120×, Back to live.
+    const nextSpeed = SPEEDS[(SPEEDS.indexOf(speed as (typeof SPEEDS)[number]) + 1) % SPEEDS.length];
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" disabled={busy} className="vg-chip"
+          onClick={() => (playing ? run("Paused", "pause") : run("Playing", "start"))}>
+          {playing ? "Pause" : "Play"}
+        </button>
+        <button type="button" disabled={busy} className="vg-chip" title={`Speed: ${speed}× (tap for ${nextSpeed}×)`}
+          aria-label={`Speed ${speed}×, change to ${nextSpeed}×`} onClick={() => run(`Speed ${nextSpeed}×`, "speed", { speed: nextSpeed })}>
+          {speed}×
+        </button>
+        <button type="button" disabled={busy} className="vg-chip" onClick={() => run("Back to live", "stop")}>
+          Back to live
+        </button>
+      </div>
+    );
+  }
   return (
     <div className="flex flex-wrap items-center gap-2">
       <button
         type="button"
         disabled={busy}
         onClick={() => (playing ? run("Paused", "pause") : run("Playing", "start"))}
-        className={cn("flex items-center gap-2 rounded-xl font-semibold disabled:opacity-50", h,
-          playing ? "bg-white/10 hover:bg-white/15" : "bg-violet-400 text-violet-950 hover:bg-violet-300")}
+        className={playing ? "vg-btn-secondary" : "vg-btn-primary"}
       >
         {playing ? <Pause className="size-5" aria-hidden /> : <Play className="size-5" aria-hidden />}
         {playing ? "Pause" : "Play"}
       </button>
-      <div role="group" aria-label="Speed" className="flex rounded-xl bg-white/5 p-1">
+      <div role="group" aria-label="Speed" className="flex gap-1">
         {SPEEDS.map((s) => (
           <button
             key={s}
@@ -54,19 +72,13 @@ export function PlaybackButtons({ compact = false, onResult }: { compact?: boole
             disabled={busy}
             aria-pressed={brief?.speed === s}
             onClick={() => run(`Speed ${s}×`, "speed", { speed: s })}
-            className={cn("rounded-lg px-3 font-mono font-semibold", compact ? "h-8 text-sm" : "h-10 text-base",
-              brief?.speed === s ? "bg-white/15 text-foreground" : "text-muted-foreground hover:text-foreground")}
+            className="vg-chip"
           >
             {s}×
           </button>
         ))}
       </div>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => run("Back to live", "stop")}
-        className={cn("flex items-center gap-2 rounded-xl bg-teal-500/15 font-semibold text-teal-100 ring-1 ring-teal-400/40 hover:bg-teal-500/25 disabled:opacity-50", h)}
-      >
+      <button type="button" disabled={busy} onClick={() => run("Back to live", "stop")} className="vg-btn-secondary">
         <Radio className="size-5" aria-hidden /> Back to live
       </button>
     </div>
@@ -94,15 +106,12 @@ export function BookmarkButtons({ bookmarks, cursor, onResult }: {
                 setBusy(i);
                 const r = await replayCall("seek", { bookmark: i });
                 setBusy(null);
-                onResult?.(r.error ? { ok: false, text: `Jump failed: ${r.error}` } : { ok: true, text: `Jumped to ${facilityHHMM(t)} · ${b.label}` });
+                onResult?.(r.error ? { ok: false, text: `Jump failed: ${r.error}` } : { ok: true, text: `Jumped to ${facilityClock12(t)} · ${b.label}` });
               }}
-              className={cn(
-                "flex h-11 items-center gap-2 rounded-lg px-3 text-left text-sm ring-1 disabled:opacity-60",
-                passed ? "bg-violet-500/15 text-violet-50 ring-violet-300/40" : "ring-white/15 hover:bg-white/5",
-              )}
+              className={cn("vg-chip text-left text-[15px]", passed && "text-muted-foreground")}
             >
               <Bookmark className="size-4 shrink-0" aria-hidden />
-              <span className="font-mono tabular-nums">{facilityHHMM(t)}</span>
+              <span className="font-bold">{facilityClock12(t)}</span>
               <span>{b.label}</span>
             </button>
           </li>

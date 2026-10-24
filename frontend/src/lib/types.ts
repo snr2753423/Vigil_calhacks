@@ -48,6 +48,10 @@ export type WireCard = {
   rule: WireRule | null;
   device: string | null;
   factors: WireFactor[];
+  /** The top factors as one plain sentence (backend app/scoring/plain.py, deterministic). */
+  plain_reason?: string;
+  /** A device issue as a chore in plain words ("Put it back on next time you pass Room 106"). */
+  task?: string | null;
   last_check: string | null;
   check_min: number | null;
   suppressed: boolean;
@@ -91,6 +95,7 @@ export type AlertMessage = {
   rule: { rule: string; kind: string; text: string; since: string | null } | null;
   new_rules: string[];
   factors: string[];
+  plain_reason?: string;
   sound: boolean;
 };
 
@@ -246,6 +251,8 @@ export type CurrentScore = {
   rule: (WireRule & { acknowledged: boolean; score: number }) | null;
   device: { rule: string; text: string } | null;
   factors: DetailFactor[];
+  plain_reason?: string;
+  task?: string | null;
   suppressed_until: string | null;
   last_check_ts: string | null;
   minutes_since_check: number | null;

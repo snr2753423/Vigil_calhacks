@@ -1,6 +1,8 @@
 import { create } from "zustand";
 
-// Per-device conveniences (role, sound), kept in localStorage when it is available.
+import type { ThemeChoice } from "@/lib/theme";
+
+// Per-device conveniences (role, sound, day/night override), kept in localStorage when it is available.
 
 export type Role = "cna" | "rn" | "don";
 
@@ -10,17 +12,22 @@ export const ROLES: Record<Role, { label: string; short: string; noteRole: "CNA"
   don: { label: "Director of Nursing", short: "DON", noteRole: "RN" },
 };
 
-type Prefs = { role: Role; sound: boolean };
+type Prefs = { role: Role; sound: boolean; theme: ThemeChoice };
 
-const KEY = "vigil.prefs";
-const DEFAULTS: Prefs = { role: "cna", sound: true };
+export const PREFS_KEY = "vigil.prefs";
+const DEFAULTS: Prefs = { role: "cna", sound: true, theme: "auto" };
+const THEMES: ThemeChoice[] = ["auto", "day", "night"];
 
 function load(): Prefs {
   try {
-    const raw = window.localStorage.getItem(KEY);
+    const raw = window.localStorage.getItem(PREFS_KEY);
     if (!raw) return DEFAULTS;
     const p = JSON.parse(raw) as Partial<Prefs>;
-    return { role: p.role && p.role in ROLES ? p.role : DEFAULTS.role, sound: p.sound ?? DEFAULTS.sound };
+    return {
+      role: p.role && p.role in ROLES ? p.role : DEFAULTS.role,
+      sound: p.sound ?? DEFAULTS.sound,
+      theme: p.theme && THEMES.includes(p.theme) ? p.theme : DEFAULTS.theme,
+    };
   } catch {
     return DEFAULTS;
   }
@@ -28,7 +35,7 @@ function load(): Prefs {
 
 function save(p: Prefs): void {
   try {
-    window.localStorage.setItem(KEY, JSON.stringify(p));
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify(p));
   } catch {
     // private mode / blocked storage: keep it in memory only
   }
@@ -39,18 +46,21 @@ type PrefsStore = Prefs & {
   hydrate: () => void;
   setRole: (role: Role) => void;
   setSound: (sound: boolean) => void;
+  setTheme: (theme: ThemeChoice) => void;
 };
 
-export const usePrefs = create<PrefsStore>()((set, get) => ({
-  ...DEFAULTS,
-  hydrated: false,
-  hydrate: () => set({ ...load(), hydrated: true }),
-  setRole: (role) => {
-    set({ role });
-    save({ role, sound: get().sound });
-  },
-  setSound: (sound) => {
-    set({ sound });
-    save({ role: get().role, sound });
-  },
-}));
+export const usePrefs = create<PrefsStore>()((set, get) => {
+  const update = (patch: Partial<Prefs>) => {
+    set(patch);
+    const { role, sound, theme } = get();
+    save({ role, sound, theme });
+  };
+  return {
+    ...DEFAULTS,
+    hydrated: false,
+    hydrate: () => set({ ...load(), hydrated: true }),
+    setRole: (role) => update({ role }),
+    setSound: (sound) => update({ sound }),
+    setTheme: (theme) => update({ theme }),
+  };
+});

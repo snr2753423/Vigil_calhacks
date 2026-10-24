@@ -1,16 +1,18 @@
 "use client";
 
-import { Users } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { useClock } from "@/hooks/use-clock";
 import { getJSON } from "@/lib/api";
+import { facilityHour, shiftName } from "@/lib/format";
 import type { StaffMember } from "@/lib/types";
 
 const REFRESH_MS = 60_000;
 
-/** Header line: who is on shift now (by the displayed facility clock). */
-export function StaffOnDuty() {
+/** Header line: "Night shift · Linda (RN), Daniel (LPN), 3 aides" (who is on shift by the displayed clock). */
+export function StaffOnDuty({ className = "" }: { className?: string }) {
   const [staff, setStaff] = useState<StaffMember[]>([]);
+  const { now, offsetS } = useClock();
 
   useEffect(() => {
     let stop = false;
@@ -26,18 +28,17 @@ export function StaffOnDuty() {
     };
   }, []);
 
-  if (!staff.length) return null;
+  const shift = now === null ? null : shiftName(facilityHour(now + offsetS * 1000));
   const lead = staff.filter((s) => s.role !== "CNA");
-  const cnas = staff.filter((s) => s.role === "CNA");
+  const aides = staff.filter((s) => s.role === "CNA").length;
+  const people = [
+    ...lead.map((s) => `${s.name.split(" ")[0]} (${s.role})`),
+    ...(aides ? [`${aides} aide${aides === 1 ? "" : "s"}`] : []),
+  ];
+  if (!shift) return null;
   return (
-    <p
-      className="hidden items-center gap-1.5 text-sm text-muted-foreground xl:flex"
-      title={staff.map((s) => `${s.role} ${s.name}${s.unit ? ` (${s.unit})` : ""}`).join("\n")}
-    >
-      <Users className="size-4" aria-hidden />
-      <span className="sr-only">On duty:</span>
-      {lead.map((s) => `${s.role} ${s.name.split(" ")[0]}`).join(" · ")}
-      {cnas.length > 0 && ` · ${cnas.length} CNAs`}
+    <p className={className} title={staff.map((s) => `${s.role} ${s.name}${s.unit ? ` (${s.unit})` : ""}`).join("\n")}>
+      {shift} shift{people.length ? ` · ${people.join(", ")}` : ""}
     </p>
   );
 }

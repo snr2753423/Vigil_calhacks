@@ -32,10 +32,10 @@ type Props = { c: Components; score: number; ruleText: string | null; news2Force
 export function ScoreBreakdown({ c, score, ruleText, news2ForcesHigh }: Props) {
   const base = PARTS.reduce((s, p) => s + c.points[p.key], 0);
   return (
-    <section aria-labelledby="score-heading" className="space-y-3 rounded-2xl bg-card p-4 ring-1 ring-white/10">
-      <h2 id="score-heading" className="flex items-baseline justify-between text-xl font-semibold">
+    <section aria-labelledby="score-heading" className="space-y-3 vg-card p-5">
+      <h2 id="score-heading" className="flex items-baseline justify-between text-xl font-bold">
         Why this score
-        <span className="font-mono text-3xl tabular-nums">{Math.round(score)}</span>
+        <span className="text-3xl tabular-nums">{Math.round(score)}</span>
       </h2>
       <ul className="space-y-3">
         {PARTS.map((p) => {
@@ -48,32 +48,32 @@ export function ScoreBreakdown({ c, score, ruleText, news2ForcesHigh }: Props) {
                   {p.label}
                   {p.note && <span className="block text-sm text-muted-foreground">{p.note(c)}</span>}
                 </span>
-                <span className="shrink-0 font-mono tabular-nums">
+                <span className="shrink-0 tabular-nums">
                   {pts.toFixed(1)} <span className="text-sm text-muted-foreground">/ {max}</span>
                 </span>
               </div>
               <div
-                className="mt-1 h-3 overflow-hidden rounded-full bg-white/[0.06]"
+                className="mt-1 h-3 overflow-hidden rounded-full bg-surface-2"
                 role="meter"
                 aria-valuemin={0}
                 aria-valuemax={max}
                 aria-valuenow={Math.round(pts * 10) / 10}
                 aria-label={p.label}
               >
-                <div className="h-full rounded-full bg-teal-300" style={{ width: `${Math.min(100, (pts / max) * 100)}%` }} />
+                <div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, (pts / max) * 100)}%` }} />
               </div>
             </li>
           );
         })}
       </ul>
-      <div className="space-y-1 border-t border-white/10 pt-3 text-base text-muted-foreground">
+      <div className="space-y-1 border-t border-line pt-3 text-base text-muted-foreground">
         <p>
           Weighted sum {base.toFixed(1)}
           {c.multi_signal && ` · +10 multi-signal pattern (${c.anomalous_metrics.join(", ")})`}
         </p>
-        {ruleText && <p className="text-red-100">Rule floor applies: {ruleText}</p>}
+        {ruleText && <p className="text-crit">Rule floor applies: {ruleText}</p>}
         {!ruleText && news2ForcesHigh && score > base + (c.multi_signal ? 10 : 0) + 0.5 && (
-          <p className="text-orange-100">NEWS2 has a single 3 or totals 5+, so the score is held at High (60).</p>
+          <p className="text-high">NEWS2 has a single 3 or totals 5+, so the score is held at High (60).</p>
         )}
       </div>
     </section>

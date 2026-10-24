@@ -1,24 +1,28 @@
 "use client";
 
-import { Loader2, Wifi, WifiOff } from "lucide-react";
+import { Loader2, WifiOff } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import type { ConnectionStatus } from "@/lib/live";
 import { useLiveStore } from "@/store/live";
 
-const STATUS: Record<ConnectionStatus, { label: string; icon: typeof Wifi; className: string }> = {
-  open: { label: "Connected", icon: Wifi, className: "bg-emerald-500/15 text-emerald-300" },
-  connecting: { label: "Connecting", icon: Loader2, className: "bg-amber-500/15 text-amber-300" },
-  closed: { label: "Reconnecting", icon: WifiOff, className: "bg-red-500/15 text-red-300" },
-};
-
+/** Silent while connected (screen readers only); words only when the live feed is down. */
 export function ConnectionBadge() {
   const status = useLiveStore((s) => s.status);
-  const { label, icon: Icon, className } = STATUS[status];
+  if (status === "open") {
+    return (
+      <span className="sr-only" role="status" aria-live="polite">
+        Connected
+      </span>
+    );
+  }
+  const connecting = status === "connecting";
   return (
-    <Badge className={`h-7 gap-1.5 px-3 text-sm ${className}`} role="status" aria-live="polite">
-      <Icon className={status === "connecting" ? "animate-spin" : undefined} aria-hidden />
-      <span className="sr-only sm:not-sr-only">{label}</span>
-    </Badge>
+    <span
+      className="inline-flex min-h-8 items-center gap-1.5 rounded-full bg-high-bg px-3 text-sm font-bold text-high"
+      role="status"
+      aria-live="polite"
+    >
+      {connecting ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <WifiOff className="size-4" aria-hidden />}
+      {connecting ? "Connecting" : "Reconnecting"}
+    </span>
   );
 }

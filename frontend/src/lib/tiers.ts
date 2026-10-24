@@ -1,26 +1,24 @@
-// Tier vocabulary (SPEC §7d): every tier has an icon + label + color, never color alone.
-import {
-  AlertOctagon,
-  AlertTriangle,
-  CheckCircle2,
-  Eye,
-  type LucideIcon,
-} from "lucide-react";
+// Tier vocabulary (SPEC §7d, Phase 11): every tier has an icon + a word + a calm action phrase, never colour alone.
+import { AlertOctagon, AlertTriangle, CheckCircle2, Eye, type LucideIcon } from "lucide-react";
 
 import type { Tier } from "@/lib/types";
 
 export type TierMeta = {
   label: string;
+  /** What to do, in calm words: "Go now", "Check within 15 minutes", … */
   action: string;
   icon: LucideIcon;
-  /** Chip: text + tinted background + ring. */
-  chip: string;
-  /** Solid swatch for the floor grid and score bars. */
-  solid: string;
-  /** Left accent bar on queue cards. */
-  accent: string;
-  /** Hex for charts / canvas. */
+  /** Pill: tinted background + AA text colour. */
+  pill: string;
+  /** Floor-plan room. */
+  room: string;
+  /** Left edge of the "Check next" card and toasts. */
+  edge: string;
+  /** Text colour. */
+  text: string;
+  /** Hex for charts / canvas: [night, day]. */
   hex: string;
+  dayHex: string;
 };
 
 export const TIERS: Record<Tier, TierMeta> = {
@@ -28,37 +26,45 @@ export const TIERS: Record<Tier, TierMeta> = {
     label: "Critical",
     action: "Go now",
     icon: AlertOctagon,
-    chip: "bg-red-500/15 text-red-200 ring-red-400/50",
-    solid: "bg-red-500 text-red-950",
-    accent: "bg-red-500",
-    hex: "#ef4444",
+    pill: "bg-crit-bg text-crit",
+    room: "bg-crit-bg text-crit font-bold outline-2 outline-crit-solid",
+    edge: "border-l-crit-solid",
+    text: "text-crit",
+    hex: "#e8836c",
+    dayHex: "#b4432f",
   },
   HIGH: {
     label: "High",
-    action: "Within 15 min",
+    action: "Check within 15 minutes",
     icon: AlertTriangle,
-    chip: "bg-orange-500/15 text-orange-200 ring-orange-400/50",
-    solid: "bg-orange-400 text-orange-950",
-    accent: "bg-orange-400",
-    hex: "#fb923c",
+    pill: "bg-high-bg text-high",
+    room: "bg-high-bg text-high font-bold outline-2 outline-high-solid",
+    edge: "border-l-high-solid",
+    text: "text-high",
+    hex: "#e3a556",
+    dayHex: "#b36b12",
   },
   WATCH: {
     label: "Watch",
-    action: "First on next round",
+    action: "Keep an eye on",
     icon: Eye,
-    chip: "bg-amber-400/10 text-amber-100 ring-amber-300/40",
-    solid: "bg-amber-300 text-amber-950",
-    accent: "bg-amber-300",
-    hex: "#fcd34d",
+    pill: "bg-watch-bg text-watch",
+    room: "bg-watch-bg text-watch font-bold",
+    edge: "border-l-watch-solid",
+    text: "text-watch",
+    hex: "#cdbb6a",
+    dayHex: "#7a6a1c",
   },
   STABLE: {
     label: "Stable",
-    action: "Routine",
+    action: "Resting as usual",
     icon: CheckCircle2,
-    chip: "bg-emerald-500/10 text-emerald-200 ring-emerald-400/30",
-    solid: "bg-slate-700 text-slate-200",
-    accent: "bg-emerald-500/40",
-    hex: "#34d399",
+    pill: "bg-stable-bg text-stable",
+    room: "bg-surface-2 text-soft",
+    edge: "border-l-stable-solid",
+    text: "text-stable",
+    hex: "#9aa59f",
+    dayHex: "#5d6b66",
   },
 };
 

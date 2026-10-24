@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Loader2, MessageSquarePlus, Mic, Sparkles, Square } from "lucide-react";
+import { Check, Loader2, FileText, MessageSquarePlus, Mic, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "cn";
 
@@ -15,8 +15,8 @@ const MAX_RECORD_S = 60;
 type State = "idle" | "recording" | "transcribing" | "saving" | "done" | "error";
 
 /** Nurse note, typed or spoken → POST /api/notes. Voice: the browser records (webm on Chrome, mp4 on iPhone Safari),
- *  Snowflake AI_TRANSCRIBE writes the text; then AI_EXTRACT reads either into fields (confusion, intake, concern)
- *  that feed NEWS2 consciousness and P_concern. Shows the transcript and the extracted fields. */
+ * Snowflake AI_TRANSCRIBE writes the text; then AI_EXTRACT reads either into fields (confusion, intake, concern)
+ * that feed NEWS2 consciousness and P_concern. Shows the transcript and the extracted fields. */
 export function AddNoteForm({ residentId, onSaved }: { residentId: number; onSaved: () => void }) {
   const role = usePrefs((s) => s.role);
   const [text, setText] = useState("");
@@ -136,8 +136,8 @@ export function AddNoteForm({ residentId, onSaved }: { residentId: number; onSav
 
   if (replay) {
     return (
-      <section className="space-y-1 rounded-2xl bg-card p-4 ring-1 ring-white/10">
-        <h2 className="flex items-center gap-2 text-xl font-semibold">
+      <section className="space-y-1 vg-card p-5">
+        <h2 className="flex items-center gap-2 text-xl font-bold">
           <MessageSquarePlus className="size-5" aria-hidden /> Add note
         </h2>
         <p className="text-base text-muted-foreground">Replay is read-only: notes are added in live mode.</p>
@@ -147,8 +147,8 @@ export function AddNoteForm({ residentId, onSaved }: { residentId: number; onSav
 
   const busy = state === "saving" || state === "transcribing" || state === "recording";
   return (
-    <form onSubmit={submit} className="space-y-3 rounded-2xl bg-card p-4 ring-1 ring-white/10">
-      <label htmlFor={`note-${residentId}`} className="flex items-center gap-2 text-xl font-semibold">
+    <form onSubmit={submit} className="space-y-3 vg-card p-5">
+      <label htmlFor={`note-${residentId}`} className="flex items-center gap-2 text-xl font-bold">
         <MessageSquarePlus className="size-5" aria-hidden /> Add note
       </label>
       <textarea
@@ -168,7 +168,7 @@ export function AddNoteForm({ residentId, onSaved }: { residentId: number; onSav
         <button
           type="submit"
           disabled={busy || !text.trim()}
-          className="flex h-12 items-center gap-2 rounded-xl bg-white/10 px-5 text-base font-semibold hover:bg-white/15 disabled:opacity-50"
+          className="flex h-12 items-center gap-2 rounded-xl bg-surface-2 px-5 text-base font-bold hover:bg-surface-2 disabled:opacity-50"
         >
           {state === "saving" && <Loader2 className="size-5 animate-spin" aria-hidden />}
           Save note
@@ -177,9 +177,9 @@ export function AddNoteForm({ residentId, onSaved }: { residentId: number; onSav
           <button
             type="button"
             onClick={stopRecording}
-            className="flex h-12 items-center gap-2 rounded-xl bg-red-500/25 px-5 text-base font-semibold text-red-50 ring-1 ring-red-400/60 hover:bg-red-500/35"
+            className="flex h-12 items-center gap-2 rounded-xl bg-crit-bg px-5 text-base font-bold text-crit ring-1 ring-crit-solid hover:bg-crit-bg"
           >
-            <span className="size-2.5 animate-pulse rounded-full bg-red-400" aria-hidden />
+            <span className="size-2.5 animate-pulse rounded-full bg-crit-solid" aria-hidden />
             <Square className="size-4" aria-hidden /> Stop · {seconds}s
           </button>
         ) : (
@@ -187,7 +187,7 @@ export function AddNoteForm({ residentId, onSaved }: { residentId: number; onSav
             type="button"
             onClick={startRecording}
             disabled={busy}
-            className="flex h-12 items-center gap-2 rounded-xl bg-white/10 px-5 text-base font-semibold hover:bg-white/15 disabled:opacity-50"
+            className="flex h-12 items-center gap-2 rounded-xl bg-surface-2 px-5 text-base font-bold hover:bg-surface-2 disabled:opacity-50"
           >
             {state === "transcribing" ? <Loader2 className="size-5 animate-spin" aria-hidden /> : <Mic className="size-5" aria-hidden />}
             {state === "transcribing" ? "Transcribing…" : "Voice note"}
@@ -195,7 +195,7 @@ export function AddNoteForm({ residentId, onSaved }: { residentId: number; onSav
         )}
         <span className="text-sm text-muted-foreground">as {noteRole}</span>
         {state === "recording" && (
-          <span className="text-sm text-red-100" role="status">
+          <span className="text-sm text-crit" role="status">
             Recording, speak now (stops at {MAX_RECORD_S} s)
           </span>
         )}
@@ -205,7 +205,7 @@ export function AddNoteForm({ residentId, onSaved }: { residentId: number; onSav
           </span>
         )}
         {state === "error" && (
-          <span className="text-sm text-red-200" role="alert">
+          <span className="text-sm text-crit" role="alert">
             {error}
           </span>
         )}
@@ -216,9 +216,9 @@ export function AddNoteForm({ residentId, onSaved }: { residentId: number; onSav
 }
 
 const CHIP_TONE = {
-  alert: "bg-red-500/15 text-red-100 ring-red-400/40",
-  warn: "bg-amber-500/14 text-amber-50 ring-amber-400/40",
-  info: "bg-white/5 text-slate-200 ring-white/10",
+  alert: "bg-crit-bg text-crit ring-crit-solid",
+  warn: "bg-high-bg text-high ring-high-solid",
+  info: "bg-surface-2 text-muted-foreground ring-line",
 } as const;
 
 function NoteResult({ r }: { r: NoteResponse }) {
@@ -226,12 +226,12 @@ function NoteResult({ r }: { r: NoteResponse }) {
   const chips = extractChips(x);
   const snowflake = x.source === "snowflake";
   return (
-    <div className="space-y-2 rounded-xl bg-white/[0.03] p-3 ring-1 ring-white/10" role="status">
-      <p className="flex items-center gap-1.5 text-sm text-emerald-200">
+    <div className="space-y-2 rounded-xl bg-surface-2 p-3 border border-line" role="status">
+      <p className="flex items-center gap-1.5 text-sm text-stable">
         <Check className="size-4" aria-hidden /> Saved {r.transcript ? "voice note" : "note"}
       </p>
       {r.transcript && (
-        <blockquote className="border-l-2 border-white/20 pl-3 text-base">
+        <blockquote className="border-l-2 border-line pl-3 text-base">
           “{r.transcript.text}”
           <span className="block text-sm text-muted-foreground">
             Snowflake AI_TRANSCRIBE · {r.transcript.audio_duration ? `${r.transcript.audio_duration.toFixed(1)} s audio · ` : ""}
@@ -242,7 +242,7 @@ function NoteResult({ r }: { r: NoteResponse }) {
       <div className="flex flex-wrap gap-2">
         <span
           className={cn(
-            "inline-flex min-h-8 items-center rounded-lg px-2.5 text-sm font-semibold ring-1",
+            "inline-flex min-h-8 items-center rounded-lg px-2.5 text-sm font-bold ring-1",
             x.concern_level === "high" || x.concern_level === "med" ? CHIP_TONE.alert : x.concern_level === "low" ? CHIP_TONE.warn : CHIP_TONE.info,
           )}
         >
@@ -255,7 +255,7 @@ function NoteResult({ r }: { r: NoteResponse }) {
         ))}
       </div>
       <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-        <Sparkles className="size-4" aria-hidden />
+        <FileText className="size-4" aria-hidden />
         {snowflake
           ? `Snowflake AI_EXTRACT${x.ms ? ` · ${(x.ms / 1000).toFixed(1)} s` : ""} · feeds NEWS2 consciousness and staff concern`
           : r.extract_status === "pending"
