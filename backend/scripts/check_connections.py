@@ -66,13 +66,13 @@ async def _check_toolkit(conn) -> Check:
     sql = "SELECT installed_version, default_version FROM pg_available_extensions WHERE name = %s"
     row = await tiger.fetchone(conn, sql, (name,))
     if row is None:
-        return Check(c, name, FAIL, "not available on this plan (hyperfunctions will use plain-SQL fallbacks)")
+        return Check(c, name, WARN, "not available on this plan (hyperfunctions will use plain-SQL fallbacks)")
     if row[0]:
         return Check(c, name, PASS, row[0])
     try:
         await tiger.execute(conn, "CREATE EXTENSION IF NOT EXISTS timescaledb_toolkit")
     except Exception as exc:
-        return Check(c, name, FAIL, f"CREATE EXTENSION failed: {one_line(exc)}")
+        return Check(c, name, WARN, f"CREATE EXTENSION failed (plain-SQL fallbacks): {one_line(exc)}")
     row = await tiger.fetchone(conn, sql, (name,))
     return Check(c, name, PASS, f"{row[0]} (extension created now)")
 
@@ -92,9 +92,12 @@ async def _probe_hyperfunctions(conn) -> Check:
 # ----------------------------------------------------------------------- Snowflake
 
 LOGIN_HINTS = {
-    "jwt": "public key not registered for this user/account — run the SQL from `make keygen`",
-    "not granted": "role not granted — run backend/sql/snowflake/001_setup.sql in Snowsight",
-    "does not exist": "check SNOWFLAKE_ACCOUNT (orgname-accountname) and SNOWFLAKE_USER",
+    "jwt": (
+        "SNOWFLAKE_USER must be the user's LOGIN_NAME (often an email), and its RSA_PUBLIC_KEY_FP must match "
+        "`make keygen` — check both with DESC USER"
+    ),
+    "role": "role missing or not granted to this user — run backend/sql/snowflake/001_setup.sql in Snowsight",
+    "does not exist": "check SNOWFLAKE_ACCOUNT (orgname-accountname) and SNOWFLAKE_USER (LOGIN_NAME)",
     "404 not found": "account not found — SNOWFLAKE_ACCOUNT must be orgname-accountname (Snowsight → account menu)",
 }
 
@@ -118,35 +121,40 @@ def check_snowflake(settings: Settings) -> list[Check]:
 
     checks: list[Check] = []
     try:
-        user, role, warehouse, database, region = sf.query(
-            conn,
-            "SELECT CURRENT_USER(), CURRENT_ROLE(), CURRENT_WAREHOUSE(), CURRENT_DATABASE(), CURRENT_REGION()",
-            feature="check",
-        )[0]
-        checks.append(Check(c, "key-pair login", PASS, f"user {user} · region {region} · {ms_since(start)}"))
-        checks.append(
-            Check(c, "role", PASS, role)
-            if (role or "").upper() == settings.snowflake_role.upper()
-            else Check(c, "role", FAIL, f"expected {settings.snowflake_role}, got {role}")
-        )
-        checks.append(_check_warehouse(conn, settings, warehouse))
-        checks.append(_check_database(conn, settings, database))
-        checks.append(_check_cross_region(conn))
-        checks.append(_check_models(conn, settings))
-        checks.append(_check_ai_complete(conn, settings))
-        checks.append(
-            _probe_show(
-                conn, "ML functions", f"SHOW SNOWFLAKE.ML.ANOMALY_DETECTION IN SCHEMA {settings.snowflake_database}.ML"
-            )
-        )
-        checks.append(
-            _probe_show(
-                conn, "Cortex Search", f"SHOW CORTEX SEARCH SERVICES IN SCHEMA {settings.snowflake_database}.DOCS"
-            )
-        )
+        _run_snowflake_checks(conn, settings, checks, start)
+    except Exception as exc:
+        checks.append(Check(c, "checks", FAIL, f"aborted: {one_line(exc)}"))
     finally:
         conn.close()
     return checks
+
+
+def _run_snowflake_checks(conn, settings: Settings, checks: list[Check], start: float) -> None:
+    c = "Snowflake"
+    user, role, warehouse, database, region = sf.query(
+        conn,
+        "SELECT CURRENT_USER(), CURRENT_ROLE(), CURRENT_WAREHOUSE(), CURRENT_DATABASE(), CURRENT_REGION()",
+        feature="check",
+    )[0]
+    checks.append(Check(c, "key-pair login", PASS, f"user {user} · region {region} · {ms_since(start)}"))
+    checks.append(
+        Check(c, "role", PASS, role)
+        if (role or "").upper() == settings.snowflake_role.upper()
+        else Check(c, "role", FAIL, f"expected {settings.snowflake_role}, got {role}")
+    )
+    checks.append(_check_warehouse(conn, settings, warehouse))
+    checks.append(_check_database(conn, settings, database))
+    checks.append(_check_cross_region(conn))
+    checks.append(_check_models(conn, settings))
+    checks.append(_check_ai_complete(conn, settings))
+    checks.append(
+        _probe_show(
+            conn, "ML functions", f"SHOW SNOWFLAKE.ML.ANOMALY_DETECTION IN SCHEMA {settings.snowflake_database}.ML"
+        )
+    )
+    checks.append(
+        _probe_show(conn, "Cortex Search", f"SHOW CORTEX SEARCH SERVICES IN SCHEMA {settings.snowflake_database}.DOCS")
+    )
 
 
 def _check_warehouse(conn, settings: Settings, current: str | None) -> Check:
@@ -214,15 +222,20 @@ def _check_ai_complete(conn, settings: Settings) -> Check:
             feature="check",
         )
     except Exception as exc:
+        if "not available for trial accounts" in str(exc):
+            return Check(
+                c, name, FAIL, "Cortex AI is blocked on this trial account → add a payment method or use the MLH trial"
+            )
         return Check(c, name, FAIL, f"{settings.cortex_model}: {one_line(exc)}")
-    reply = " ".join(str(reply).split())[:60]
+    reply = " ".join(str(reply).split()).strip('"')[:60]  # AI_COMPLETE returns a JSON-quoted string
     return Check(c, name, PASS, f'{settings.cortex_model} → "{reply}" · {ms_since(start)}')
 
 
 def _probe_show(conn, name: str, sql: str) -> Check:
     try:
         rows = sf.query(conn, sql, feature="check")
-        return Check("Snowflake", name, PASS, f"available ({len(rows)} existing)")
+        # Visibility only: real use (training, search) is first exercised in Phases 5-6.
+        return Check("Snowflake", name, PASS, f"visible ({len(rows)} existing; usage not exercised yet)")
     except Exception as exc:
         return Check("Snowflake", name, WARN, one_line(exc, 120))
 

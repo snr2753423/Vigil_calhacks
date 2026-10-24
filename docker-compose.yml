@@ -30,6 +30,9 @@ services:
       - frontend
     ports:
       - "8080:8080"
+      # With SITE_ADDRESS set to a real domain (Vultr), Caddy serves HTTPS on 80/443: publish them too.
+      # - "80:80"
+      # - "443:443"
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:-:8080}
       BACKEND_UPSTREAM: backend:8000

@@ -4,6 +4,7 @@ Phase 1: connection registry plus a heartbeat broadcast every `heartbeat_interva
 """
 
 import asyncio
+import contextlib
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -48,7 +49,13 @@ class Hub:
         )
         for ws, result in zip(clients, results, strict=True):
             if isinstance(result, BaseException):
-                self.disconnect(ws)
+                await self._drop(ws)
+
+    async def _drop(self, ws: WebSocket) -> None:
+        """Forget the client and close its socket so the browser notices and reconnects."""
+        self.disconnect(ws)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(ws.close(code=1011), SEND_TIMEOUT_S)
 
 
 hub = Hub()
@@ -92,7 +99,7 @@ async def ws_live(ws: WebSocket) -> None:
         )
         while True:  # client → server messages are ignored for now
             await ws.receive_text()
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):  # RuntimeError: the hub already closed this socket
         pass
     finally:
         hub.disconnect(ws)

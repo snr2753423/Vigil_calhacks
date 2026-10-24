@@ -20,6 +20,8 @@ $(FRONTEND)/node_modules/.modules.yaml: $(FRONTEND)/package.json $(FRONTEND)/pnp
 
 dev: $(FRONTEND)/node_modules/.modules.yaml ## Local dev: Caddy :8080 → backend :8000 (reload) + frontend :3000 (HMR)
 	@command -v caddy >/dev/null || { echo "caddy not found — brew install caddy (or use 'make up' for Docker)"; exit 1; }
+	@busy=$$(for p in 8000 3000 8080; do lsof -nP -iTCP:$$p -sTCP:LISTEN -t >/dev/null 2>&1 && printf ' %s' $$p; done); \
+	  if [ -n "$$busy" ]; then echo "port(s)$$busy already in use — stop the old stack first (lsof -nP -iTCP:<port> -sTCP:LISTEN)"; exit 1; fi
 	@echo "Vigil dev → http://localhost:8080   (Ctrl-C stops everything)"
 	@trap 'kill 0' INT TERM; \
 	  (cd $(BACKEND) && uv run uvicorn app.main:app --reload --reload-dir app --host 127.0.0.1 --port 8000) & \

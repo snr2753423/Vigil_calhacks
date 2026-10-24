@@ -60,6 +60,11 @@ export function reconnectDelayMs(attempt: number): number {
   return Math.min(500 * 2 ** attempt, 5000);
 }
 
+/** An open socket that has been silent for 3 heartbeats (min 5 s) is presumed dead (half-open, dropped). */
+export function isStale(lastMessageAt: number, now: number, heartbeatIntervalS: number | null): boolean {
+  return now - lastMessageAt > Math.max(3 * (heartbeatIntervalS ?? 2) * 1000, 5000);
+}
+
 export function parseLiveMessage(raw: string): LiveMessage | null {
   try {
     const msg: unknown = JSON.parse(raw);

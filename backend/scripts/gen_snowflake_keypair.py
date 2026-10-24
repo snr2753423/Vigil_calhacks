@@ -2,7 +2,7 @@
 
 uv run python scripts/gen_snowflake_keypair.py            # keeps an existing key
 uv run python scripts/gen_snowflake_keypair.py --force    # rotates (re-run the SQL!)
-uv run python scripts/gen_snowflake_keypair.py --user ME  # name the user explicitly
+uv run python scripts/gen_snowflake_keypair.py --user me  # another user (exact, case-sensitive)
 """
 
 import argparse
@@ -47,15 +47,19 @@ def public_key_fingerprint(private_pem: bytes) -> str:
 
 
 def alter_user_sql(body: str, user: str | None) -> str:
-    if user:
-        return f"ALTER USER \"{user.upper()}\" SET RSA_PUBLIC_KEY = '{body}';"
-    return f"SET vigil_user = CURRENT_USER();\nALTER USER IDENTIFIER($vigil_user) SET RSA_PUBLIC_KEY = '{body}';"
+    # The setup block ends as VIGIL_ROLE, which cannot alter users: switch back first.
+    # User names are matched exactly (quoted): trial user names can be lowercase and case-sensitive.
+    name = f"'\"{user}\"'" if user else "'\"' || CURRENT_USER() || '\"'"
+    return (
+        f"USE ROLE ACCOUNTADMIN;\nSET vigil_user = {name};\n"
+        f"ALTER USER IDENTIFIER($vigil_user) SET RSA_PUBLIC_KEY = '{body}';"
+    )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--force", action="store_true", help="overwrite an existing key pair")
-    parser.add_argument("--user", help="Snowflake user name (default: SNOWFLAKE_USER or CURRENT_USER())")
+    parser.add_argument("--user", help="exact Snowflake user name (default: CURRENT_USER() of the Snowsight session)")
     args = parser.parse_args()
 
     settings = get_settings()
@@ -66,11 +70,14 @@ def main() -> int:
         print(f"Using existing private key {private_path} (pass --force to rotate).")
         private_pem = private_path.read_bytes()
     else:
-        private_path.parent.mkdir(parents=True, exist_ok=True)
-        os.chmod(private_path.parent, 0o700)
+        if not private_path.parent.exists():  # only tighten a directory we create (never the repo root, $HOME, /tmp)
+            private_path.parent.mkdir(parents=True, mode=0o700)
         private_pem = generate_private_key_pem()
-        private_path.write_bytes(private_pem)
-        os.chmod(private_path, 0o600)
+        # Create the file 0600 from the start so the key is never briefly world-readable.
+        fd = os.open(private_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(private_pem)
+        os.chmod(private_path, 0o600)  # an existing file (--force) keeps its old mode otherwise
         print(f"Wrote private key {private_path} (chmod 600, gitignored).")
 
     public_pem = serialization.load_der_public_key(public_key_der(private_pem)).public_bytes(
@@ -81,14 +88,14 @@ def main() -> int:
     print(f"Fingerprint       {public_key_fingerprint(private_pem)}")
 
     rel_key = private_path.relative_to(ROOT_DIR) if private_path.is_relative_to(ROOT_DIR) else private_path
-    user = args.user or settings.snowflake_user
+    user = args.user
     rule = "-" * 78
     print(f"\n{rule}\n1) In Snowsight, run as ACCOUNTADMIN while logged in as the Vigil user:\n{rule}")
     print(SETUP_SQL.read_text().strip())
     print(f"\n{rule}\n2) Register the public key (same worksheet):\n{rule}")
     print(alter_user_sql(public_key_body(private_pem), user))
     print("\n-- Verify: RSA_PUBLIC_KEY_FP should equal the fingerprint printed above.")
-    print("DESC USER IDENTIFIER($vigil_user);" if not user else f'DESC USER "{user.upper()}";')
+    print("DESC USER IDENTIFIER($vigil_user);")
     print(f"\n{rule}\n3) In .env set SNOWFLAKE_PRIVATE_KEY_PATH={rel_key}, then run `make check`.\n{rule}")
     return 0
 

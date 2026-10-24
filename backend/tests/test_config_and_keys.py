@@ -21,7 +21,10 @@ def test_absolute_key_path_is_kept(tmp_path: Path) -> None:
     assert s.snowflake_private_key_file == tmp_path / "k.p8"
 
 
-def test_snowflake_configured_needs_account_and_user() -> None:
+def test_snowflake_configured_needs_account_and_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    # _env_file=None skips .env, but exported env vars still count: clear them for a hermetic test.
+    monkeypatch.delenv("SNOWFLAKE_ACCOUNT", raising=False)
+    monkeypatch.delenv("SNOWFLAKE_USER", raising=False)
     assert not Settings(_env_file=None).snowflake_configured
     assert Settings(_env_file=None, snowflake_account="org-acct", snowflake_user="me").snowflake_configured
 
@@ -44,5 +47,11 @@ def test_fingerprint_format(private_pem: bytes) -> None:
 
 
 def test_alter_user_sql() -> None:
-    assert keygen.alter_user_sql("ABC", "me") == "ALTER USER \"ME\" SET RSA_PUBLIC_KEY = 'ABC';"
-    assert "IDENTIFIER($vigil_user)" in keygen.alter_user_sql("ABC", None)
+    named = keygen.alter_user_sql("ABC", "me").splitlines()
+    assert named == [
+        "USE ROLE ACCOUNTADMIN;",
+        "SET vigil_user = '\"me\"';",
+        "ALTER USER IDENTIFIER($vigil_user) SET RSA_PUBLIC_KEY = 'ABC';",
+    ]
+    current = keygen.alter_user_sql("ABC", None).splitlines()
+    assert current[1] == "SET vigil_user = '\"' || CURRENT_USER() || '\"';"

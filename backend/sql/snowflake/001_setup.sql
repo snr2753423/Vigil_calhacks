@@ -2,7 +2,8 @@
 -- user Vigil connects with (SNOWFLAKE_USER). Idempotent: safe to re-run.
 
 USE ROLE ACCOUNTADMIN;
-SET vigil_user = CURRENT_USER();
+-- Quoted so IDENTIFIER() keeps the exact name; trial user names can be lowercase and case-sensitive.
+SET vigil_user = '"' || CURRENT_USER() || '"';
 
 -- App role: owns the VIGIL database, uses the warehouse, may call Cortex.
 CREATE ROLE IF NOT EXISTS VIGIL_ROLE;

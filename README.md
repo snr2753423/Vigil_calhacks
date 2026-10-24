@@ -27,10 +27,10 @@ cp .env.example .env         # then fill in the values below
 1. **Tiger Cloud.** Paste the service connection string into `TIGER_DATABASE_URL`.
 2. **Snowflake key-pair.** Run `make keygen`. It writes `secrets/snowflake_rsa_key.p8` and `.pub` (gitignored, chmod 600) and prints two SQL blocks. It reuses an existing key unless you pass `--force`.
    - Paste both blocks into a Snowsight worksheet, logged in as the user Vigil will connect as, and run them as **ACCOUNTADMIN**. The first block is `backend/sql/snowflake/001_setup.sql`: role `VIGIL_ROLE`, warehouse `VIGIL_WH` (XSMALL, auto-suspend 60 s), database `VIGIL` with schemas `CORE`, `ML` and `DOCS`, the Cortex grant, and cross-region inference. The second block is `ALTER USER … SET RSA_PUBLIC_KEY = '…'`.
-   - Set `SNOWFLAKE_ACCOUNT` to `orgname-accountname` (Snowsight → account menu → *Connect a tool*) and `SNOWFLAKE_USER` to your user name.
+   - Set `SNOWFLAKE_ACCOUNT` to `orgname-accountname` (Snowsight → account menu → *Connect a tool*) and `SNOWFLAKE_USER` to your **login name**. Key-pair login matches `LOGIN_NAME`, not `NAME`, and on trial accounts it is often your email. Check it in Snowsight with `SET u = '"' || CURRENT_USER() || '"'; DESC USER IDENTIFIER($u);`.
 3. **Verify.** Run `make check`. It prints a PASS/WARN/FAIL table and exits non-zero on any FAIL.
    - Tiger rows: server and TimescaleDB versions, `timescaledb_toolkit` (created if missing), and a `percentile_agg` probe.
-   - Snowflake rows: key-pair login, role, warehouse, the `VIGIL` schemas, the cross-region setting, Claude models visible via `SHOW CORTEX BASE MODELS`, a one-line `AI_COMPLETE` with `CORTEX_MODEL`, and whether ML anomaly detection and Cortex Search can be used.
+   - Snowflake rows: key-pair login, role, warehouse, the `VIGIL` schemas, the cross-region setting, Claude models visible via `SHOW CORTEX BASE MODELS`, a one-line `AI_COMPLETE` with `CORTEX_MODEL`, and whether the ML anomaly-detection class and Cortex Search are visible (actually using them is first exercised in Phases 5–6).
 
 > If `VIGIL` was created earlier by another role, run `GRANT OWNERSHIP ON DATABASE VIGIL TO ROLE VIGIL_ROLE COPY CURRENT GRANTS;` and the same for each of its schemas. Otherwise later phases can't create objects in it.
 
@@ -60,7 +60,7 @@ make logs
 make down
 ```
 
-Compose reads `.env` and mounts `./secrets` read-only into the backend. The `Caddyfile` is the same in both modes. Only the upstreams differ: `BACKEND_UPSTREAM=backend:8000` and `FRONTEND_UPSTREAM=frontend:3000` are set in `docker-compose.yml`. On Vultr, set `SITE_ADDRESS` to your domain and Caddy handles HTTPS automatically (Phase 10).
+Compose reads `.env` and mounts `./secrets` read-only into the backend. The `Caddyfile` is the same in both modes. Only the upstreams differ: `BACKEND_UPSTREAM=backend:8000` and `FRONTEND_UPSTREAM=frontend:3000` are set in `docker-compose.yml`. On Vultr, set `SITE_ADDRESS` to your domain **and publish ports 80/443 on the `caddy` service** (Compose only publishes 8080 today); Caddy then handles HTTPS automatically (Phase 10).
 
 ### iPhone (HTTPS)
 
@@ -106,7 +106,8 @@ What works:
 Verified here: `make dev` serves http://localhost:8080 with the heartbeat ticking every 2.0 s through Caddy, at desktop and phone widths, and reconnects after a backend restart. `make test` and `make lint` are clean. `next build` succeeds.
 
 Known issues and not yet verified:
-- `make check` has only been run without credentials and with deliberately bad ones; both fail cleanly. The PASS path needs real Tiger and Snowflake accounts.
+- `make check` against the real accounts: **all PASS**. Tiger: PostgreSQL 18.6, TimescaleDB 2.30.2, toolkit 1.26.0. Snowflake: key-pair login, `VIGIL_ROLE`, `VIGIL_WH`, schemas, cross-region, `claude-sonnet-5` listed, `AI_COMPLETE` answers in ~2 s, ML-function and Cortex Search classes visible (not yet exercised). Cortex AI only works on a trial account after a payment method is added.
+- **Cortex REST `POST /api/v2/cortex/inference:complete` returns 403** ("This account is not allowed to access this endpoint") for every model, even though SQL `AI_COMPLETE` works. The same JWT works for the SQL API (`/api/v2/statements`), Cortex Analyst and Cortex Search. If it doesn't clear by Phase 6, ask Snowflake support, or run `AI_COMPLETE` through the SQL API instead (still a Snowflake REST call).
 - Docker Compose mode is written but not run here, because the Docker daemon wasn't running on the build machine.
 - `make migrate` and `make seed` are stubs until Phase 2.
 - `CORTEX_MODEL` defaults to `claude-sonnet-5`. In AWS US West 2 every Claude model needs cross-region inference, which `001_setup.sql` enables. `make check` lists the models your account can actually use.

@@ -5,6 +5,7 @@ import {
   MAX_INTERVALS,
   applyMessage,
   initialLiveState,
+  isStale,
   liveSocketUrl,
   parseLiveMessage,
   reconnectDelayMs,
@@ -33,6 +34,15 @@ describe("liveSocketUrl", () => {
 describe("reconnectDelayMs", () => {
   it("backs off exponentially and caps at 5 s", () => {
     expect([0, 1, 2, 3, 4, 10].map(reconnectDelayMs)).toEqual([500, 1000, 2000, 4000, 5000, 5000]);
+  });
+});
+
+describe("isStale", () => {
+  it("allows 3 heartbeats of silence (at least 5 s) before declaring the socket dead", () => {
+    expect(isStale(0, 5_000, 2)).toBe(false);
+    expect(isStale(0, 6_001, 2)).toBe(true);
+    expect(isStale(0, 4_999, 1)).toBe(false); // floor of 5 s
+    expect(isStale(0, 5_001, null)).toBe(false); // default 2 s interval -> 6 s
   });
 });
 

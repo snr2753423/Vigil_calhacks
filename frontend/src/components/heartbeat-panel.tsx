@@ -1,6 +1,7 @@
 "use client";
 
 import { Activity } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 
 import { HeartbeatChart } from "@/components/charts/heartbeat-chart";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,7 +19,14 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 export function HeartbeatPanel() {
   const now = useNow();
-  const { lastHeartbeat: hb, intervalsMs, heartbeatIntervalS, status } = useLiveStore();
+  const { lastHeartbeat: hb, intervalsMs, heartbeatIntervalS, status } = useLiveStore(
+    useShallow((s) => ({
+      lastHeartbeat: s.lastHeartbeat,
+      intervalsMs: s.intervalsMs,
+      heartbeatIntervalS: s.heartbeatIntervalS,
+      status: s.status,
+    })),
+  );
   const ageS = hb && now !== null ? Math.max(0, (now - hb.receivedAt) / 1000) : null;
   const fresh = status === "open" && ageS !== null && ageS < (heartbeatIntervalS ?? 2) * 2;
 

@@ -91,6 +91,8 @@ def connect(settings: Settings | None = None) -> snowflake.connector.SnowflakeCo
             database=settings.snowflake_database,
             login_timeout=LOGIN_TIMEOUT_S,
             application="vigil",
+            # Explicit to silence the connector's FutureWarning; we run no async queries, so always log out on close.
+            enable_server_session_keep_alive_auto_detection=False,
         )
 
 
