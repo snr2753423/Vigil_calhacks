@@ -7,10 +7,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import checks, explain, health, insights, notes, queue, residents, sim, staff, stats
+from app.api import checks, devices, explain, health, insights, notes, queue, residents, sim, staff, stats
 from app.config import get_settings
 from app.db import snowflake_rest, tiger
 from app.deep import assess, sync
+from app.devices import ingest
 from app.scoring import evaluator
 from app.sim import live_loop
 from app.ws import hub
@@ -32,6 +33,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         tasks.append(sync_task)
     if (assess_task := assess.start()) is not None:  # Cortex AI assessments on tier rise / stale top 5
         tasks.append(assess_task)
+    if (ingest_task := ingest.start()) is not None:  # Polar band + iPhone bed sensor → Tiger every 1 s
+        tasks.append(ingest_task)
     try:
         yield
     finally:
@@ -60,4 +63,6 @@ app.include_router(sim.router)
 app.include_router(insights.router)
 app.include_router(explain.router)
 app.include_router(stats.router)
+app.include_router(devices.router)
 app.include_router(hub.router)
+app.include_router(ingest.router)

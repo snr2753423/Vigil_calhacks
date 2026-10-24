@@ -74,5 +74,8 @@ lint: ## ruff + eslint + tsc --noEmit
 	cd $(BACKEND) && uv run ruff check . && uv run ruff format --check .
 	cd $(FRONTEND) && pnpm lint && pnpm typecheck
 
-tunnel: ## Public HTTPS URL for the iPhone pages (cloudflared → localhost:8080)
+tunnel: ## Public HTTPS URL for the iPhone pages (cloudflared → localhost:8080); put it in .env as PUBLIC_URL
+	@command -v cloudflared >/dev/null || { echo "cloudflared not found — brew install cloudflared"; exit 1; }
+	@echo "Copy the https://….trycloudflare.com URL below into .env as PUBLIC_URL=… (no restart needed),"
+	@echo "then scan the QR code on http://localhost:8080/devices with the iPhone."
 	cloudflared tunnel --url http://localhost:8080

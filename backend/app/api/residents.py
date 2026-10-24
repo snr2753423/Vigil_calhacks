@@ -9,6 +9,7 @@ from app.db import tiger
 from app.deep.assess import get_assessor, template_assessment
 from app.scoring import evaluator as ev
 from app.scoring.baseline import Baselines, tod_block
+from app.scoring.priority import TIER_RANK
 
 router = APIRouter(prefix="/api/residents", tags=["residents"])
 
@@ -22,8 +23,19 @@ async def assessment_for(conn, resident: dict, current: dict | None, at: datetim
     rid = resident["resident_id"]
     assessor = get_assessor()
     cached = await assessor.cached(conn, rid, at, live=live)
+    pending = assessor.pending(rid, None if live else at)
+    if cached and pending and current and _outdated(cached, current):
+        cached = None  # the situation changed and Cortex is on it: the template fits better than the old card
     card = cached or template_assessment(resident, current) | {"as_of": at.isoformat()}
-    return card | {"pending": assessor.pending(rid, None if live else at)}
+    return card | {"pending": pending}
+
+
+def _outdated(card: dict, current: dict) -> bool:
+    """The card predates the current situation: the tier rose since, or the rule in force began after it."""
+    if TIER_RANK[current["tier"]] > TIER_RANK.get(card.get("tier") or "", 0):
+        return True
+    since = (current.get("rule") or {}).get("since")
+    return bool(since and card.get("as_of") and datetime.fromisoformat(card["as_of"]) < datetime.fromisoformat(since))
 
 
 @router.get("")

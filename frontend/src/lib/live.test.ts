@@ -102,3 +102,25 @@ describe("formatFacilityClock", () => {
     expect(formatFacilityClock(t, 3600)).toBe("03:14:05");
   });
 });
+
+describe("device messages", () => {
+  const dev = (hr: number | null, at: string) =>
+    ({ type: "device", ts: at, resident_id: 120, device: "polar", reading_ts: at, hr, worn: true }) as const;
+
+  it("keeps the newest reading per device and a trail of live HR", () => {
+    let s: LiveState = initialLiveState;
+    s = { ...s, ...applyMessage(s, dev(70, "2026-10-17T10:00:00.000Z"), 1) };
+    s = { ...s, ...applyMessage(s, dev(72, "2026-10-17T10:00:01.000Z"), 2) };
+    s = { ...s, ...applyMessage(s, dev(null, "2026-10-17T10:00:02.000Z"), 3) };
+    expect(s.devices["120:polar"].hr).toBeNull();
+    expect(s.devices["120:polar"].receivedAt).toBe(3);
+    expect(s.liveHr[120].map(([, hr]) => hr)).toEqual([70, 72]);
+  });
+
+  it("drops trail points older than the window", () => {
+    let s: LiveState = initialLiveState;
+    s = { ...s, ...applyMessage(s, dev(70, "2026-10-17T10:00:00.000Z"), 1) };
+    s = { ...s, ...applyMessage(s, dev(75, "2026-10-17T10:20:00.000Z"), 2) };
+    expect(s.liveHr[120]).toEqual([[Date.parse("2026-10-17T10:20:00.000Z"), 75]]);
+  });
+});

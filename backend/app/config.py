@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     # Live WebSocket
     heartbeat_interval_s: float = 2.0
 
+    # Live hardware (SPEC §10): the public HTTPS origin (cloudflared tunnel or the Vultr domain) for the
+    # iPhone bed-sensor QR code on /devices. Re-read on each request, so no restart is needed after editing.
+    public_url: str | None = None
+    device_ingest_enabled: bool = True  # the 1-s device writer (WS /ws/ingest still answers when off)
+
     @property
     def snowflake_private_key_file(self) -> Path:
         """Key path; relative paths resolve against the repo root."""

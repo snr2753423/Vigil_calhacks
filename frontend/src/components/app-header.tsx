@@ -14,15 +14,18 @@ import { ROLES, type Role, usePrefs } from "@/store/prefs";
 
 const NAV = [
   { href: "/", label: "Rounds" },
+  { href: "/devices", label: "Devices" },
   { href: "/admin", label: "Admin" },
 ];
 
 export function AppHeader() {
+  const path = usePathname();
   const now = useNow();
   const sim = useLiveStore((s) => s.sim);
   const night = useLiveStore((s) => s.queue?.night ?? false);
   const clock = now === null ? "--:--:--" : formatFacilityClock(now, sim?.display_clock_offset_s);
   const replay = sim?.mode === "replay";
+  if (path.startsWith("/bed/")) return null; // the iPhone bed-sensor page is a standalone tool
 
   return (
     <header className="z-40 border-b sm:sticky sm:top-0 border-border/60 bg-background/90 backdrop-blur">

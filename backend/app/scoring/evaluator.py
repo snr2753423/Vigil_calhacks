@@ -572,11 +572,11 @@ class Evaluator:
     async def _loop(self, conn: psycopg.AsyncConnection) -> None:
         while True:
             started = time.monotonic()
+            self._wake.clear()  # before the cycle: a poke during it (a bed exit, a check) runs the next one at once
             if sim_state.paused:
                 self.stats.phase = "paused"  # the simulator is frozen: freeze the queue with it
             else:
                 await self.cycle(conn)
-            self._wake.clear()
             delay = max(0.05, self.interval_s - (time.monotonic() - started))
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._wake.wait(), delay)
@@ -590,14 +590,19 @@ class Evaluator:
         t0 = time.perf_counter()
         queue = await evaluate(conn, as_of, self.ctx, self.gate, clock)
         alerts, events = self._alerts(queue, clock)
+        self.latest = queue
+        # Publish first, store second: the UI (and Cortex) shouldn't wait on the snapshot write's round trips.
+        await self._publish(queue, clock)
+        assessor = assess.get_assessor()
+        for a in alerts:
+            await hub.broadcast(a)
+            assessor.on_alert(
+                a["resident_id"], a["tier"], rule=bool(a["new_rules"])
+            )  # Cortex now, not on the 10-s scan
         await self._write(conn, queue, events)
         total = (time.perf_counter() - t0) * 1000
         queue.total_ms = total
-        self.latest = queue
         self._record(queue, total)
-        await self._publish(queue, clock)
-        for a in alerts:
-            await hub.broadcast(a)
         return queue
 
     async def _publish(self, queue: Queue, clock: NightClock) -> None:

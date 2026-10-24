@@ -142,3 +142,16 @@ function round(v: number, digits: number): number {
   const f = 10 ** digits;
   return Math.round(v * f) / f;
 }
+
+/** Live device readings (e.g. the Polar band, 1 s) newer than `after` appended to a bucketed series, so a
+ *  live resident's chart moves within a second instead of at the next 30-s reload. */
+export function appendLive(
+  ts: number[],
+  values: (number | null)[],
+  live: [number, number][] | undefined,
+  after: number,
+): { ts: number[]; values: (number | null)[] } {
+  const fresh = (live ?? []).filter(([t]) => t > after && t > (ts[ts.length - 1] ?? -Infinity));
+  if (fresh.length === 0) return { ts, values };
+  return { ts: [...ts, ...fresh.map(([t]) => t)], values: [...values, ...fresh.map(([, v]) => v)] };
+}

@@ -62,9 +62,38 @@ make down
 
 Compose reads `.env` and mounts `./secrets` read-only into the backend. The `Caddyfile` is the same in both modes. Only the upstreams differ: `BACKEND_UPSTREAM=backend:8000` and `FRONTEND_UPSTREAM=frontend:3000` are set in `docker-compose.yml`. On Vultr, set `SITE_ADDRESS` to your domain **and publish ports 80/443 on the `caddy` service** (Compose only publishes 8080 today); Caddy then handles HTTPS automatically (Phase 10).
 
-### iPhone (HTTPS)
+### Live hardware: Polar band + iPhone bed sensor (Phase 7)
 
-`make tunnel` runs `cloudflared tunnel --url http://localhost:8080`. Open the printed `https://*.trycloudflare.com` URL on the phone. The Next dev server already allows that origin through `allowedDevOrigins`.
+The presenter is R-120 Thomas Grant. A Polar Verity Sense streams HR from the Mac's Chrome (Web Bluetooth), and an iPhone under the pillow is his bed sensor. Both send to `WS /ws/ingest`, and the backend writes them to Tiger every second.
+
+1. **Mac setup (once).** Use Chrome. In System Settings → Privacy & Security → Bluetooth, allow Google Chrome. Install cloudflared: `brew install cloudflared`.
+2. **Start the stack.** Run `make dev`, then open http://localhost:8080/devices in Chrome.
+3. **Polar band.** Put the band on and press its button until the LED shows HR mode (no macOS pairing needed). Click **Connect Polar**, pick "Polar Sense …" in Chrome's list, and click Pair.
+   - Within ~2 s, the big number shows your HR, "Skin contact: On the wrist" appears, and "Streamed" counts up.
+   - Open R-120 from the Rounds queue. The heart-rate chart shows "Polar live · NN bpm" and the line extends every second.
+   - The connection lives outside the page, so it keeps streaming while you navigate. After a full reload, click Connect again.
+   - If the band drops (out of range, asleep), it reconnects by itself. The status shows "reconnecting".
+4. **Tunnel.** In a second terminal, run `make tunnel` and copy the `https://<words>.trycloudflare.com` URL. Put it in `.env` as `PUBLIC_URL=https://<words>.trycloudflare.com` (no backend restart needed). The `/devices` page shows the QR code within 3 s.
+5. **iPhone.** Turn Low Power Mode off, and turn the volume up for the spoken prompts. Scan the QR code with the Camera app and open the link in Safari. Tap **Start sensor**, then **Allow** motion access. The page shows "● streaming" and a live motion meter.
+   - If you tapped Don't Allow, close the tab and open the link again. If the "Screen awake" line says no, set Settings → Display & Brightness → Auto-Lock → Never.
+6. **Calibrate (~35 s, spoken).** Tap **Calibrate** next to the bed and follow the voice:
+   - "Put the phone under the pillow, then step away" (8 s), then "Recording the empty bed" (5 s).
+   - "Now lie down" (6 s), then "Stay still" (10 s). Put your head on that pillow.
+   - "Now roll over or shift your weight" (5 s).
+   - "Calibration done", and you are in bed.
+
+   `/devices` then shows the detection mode:
+   - **tilt**: exit in ~2 s. Expected under a pillow.
+   - **breathing motion**: ~4 s.
+   - **burst + 10 s still**: the SPEC fallback. Move the phone closer to your head and recalibrate.
+
+   The calibration is saved in Tiger (`sim_meta`), so a backend restart keeps it.
+7. **Bed-exit test.** In Admin, click **Force night**. Lie down with your head on the pillow and wait for the phone to say you're in bed. Then get up and walk away.
+   - The phone says "Out of bed".
+   - Within ~5 s, R-120 is **#1 CRITICAL 90**: "Out of bed since HH:MM without staff (1-assist, Morse 70)". A toast and chime appear on the Rounds queue.
+   - R-120's AI card shows the template at once, citing "Fall precautions: bed alarm; assist ×1 to bathroom; …". It says "Asking Snowflake Cortex…" and is replaced by the Cortex card ~12–15 s later.
+   - Lie back down: the phone says "Back in bed". The fall-prevention rule holds for 5 min, or until you click **Mark checked** on R-120 (Phase 3 alarm-fatigue rule).
+8. **Fallbacks.** In Admin, **Bed exit R-120** / **Back in bed** record an exit or return through the same bed-sensor path, without the phone. **Simulated band for R-120** simulates him entirely; while it is on, readings from the real devices are ignored, and `/devices` says so.
 
 ## Commands
 
@@ -83,13 +112,64 @@ Compose reads `.env` and mounts `./secrets` read-only into the backend. The `Cad
 | `make care-plans` | Write the 120 care-plan PDFs, upload + `AI_PARSE_DOCUMENT` + chunk them in Snowflake, build Cortex Search (~10 min) |
 | `make test` | backend pytest + frontend vitest |
 | `make lint` | ruff + eslint + `tsc --noEmit` |
-| `make tunnel` | cloudflared HTTPS tunnel to :8080 |
+| `make tunnel` | cloudflared HTTPS tunnel to :8080 (copy its URL into `.env` as `PUBLIC_URL`) |
 
 ## Layout
 
 The layout follows SPEC §5. `backend/app/` holds `api/`, `ws/`, `db/` (`tiger.py`, `snowflake_sql.py`, `snowflake_rest.py`), `sim/`, `scoring/`, `deep/` and `devices/`. SQL lives in `backend/sql/{tiger,snowflake}` and scripts in `backend/scripts/`. `frontend/` is a Next.js App Router app. Modules for later phases are placeholders whose docstrings name the phase that fills them in.
 
 ## Status
+
+**Phase 7 (live hardware: Polar band + iPhone bed sensor): done in code; real-hardware test pending**
+
+What works:
+- **`WS /ws/ingest`** (`app/devices/ingest.py`) accepts these messages:
+  - `hello`
+  - Polar `{resident_id, ts, hr, worn}`, written as source 1
+  - iPhone `{resident_id, ts, motion_energy, peak_jolt, gravity}`, written as source 2
+  - `calibrate` begin/finish/cancel
+  
+  Only R-120 takes device data, and none while the simulated band is on.
+  - A device timestamp in the future or > 10 s old is replaced by the server's time.
+  - Rows are buffered and written every 1 s. A bed transition triggers an immediate write. The rows and the `bed_exit`/`bed_return` event go in one writable-CTE statement on the writer's own connection (one round trip, ~0.3 s to Tiger Cloud).
+  - After a transition, the writer pokes the evaluator and broadcasts the event on `/ws/live`. Each reading is also broadcast as a `device` message, used by `/devices` and R-120's chart.
+- **Bed state machine** (`app/devices/bed_state.py`, pure): calibration (empty 5 s, lie still 10 s, shift 5 s, with unrecorded prep pauses) derives the quiet-energy and burst thresholds. Three detection modes:
+  - **tilt**: an under-pillow phone tips with the head's weight. Exit after 2 s of empty-bed tilt.
+  - **breathing motion**: a burst, then 4 s of empty-bed quiet.
+  - **SPEC fallback**: a burst, then ≥ 10 s still; another burst is a return.
+  
+  Rolling over is not an exit. The tracker also reports restlessness levels and `bed_motion` on the simulator's 0–10 scale. The calibration and the last bed state survive restarts.
+- **Fall-prevention → AI card fast path:** the evaluator calls `Assessor.on_alert` the moment it raises an alert, so the Cortex call starts in the same second (30 s debounce).
+  - While it runs, the card shows the deterministic template. For bed exits and falls, the template cites the care plan's "Fall precautions: bed alarm; assist ×1 to bathroom; …" and mobility lines (verbatim, from the same roster fields).
+  - An older Cortex card yields to the template when the rule in force started after it.
+  - For fall situations, the prompt asks Cortex to quote the fall-precautions line.
+- **Latency fixes**:
+  - The evaluator now publishes the queue *before* writing snapshots.
+  - A poke that lands mid-cycle is no longer lost: the wake event is cleared before the cycle, not after.
+- **UI**:
+  - `/devices`: Connect Polar (Web Bluetooth, `0x2A37`; the parser handles 8/16-bit HR, contact bits, energy and RR intervals), big live HR, contact, stream counts, auto-reconnect with backoff, and a QR code for `PUBLIC_URL/bed/120` (falls back to the page's own HTTPS origin). It also shows the live bed state and calibration mode, and the device list with Tiger-writer stats.
+  - `/bed/[residentId]`: Start (iOS motion permission + screen wake lock), 1-s summaries, a motion meter, the in-bed/out-of-bed state, and spoken calibration. The page has no header and plays no chime.
+  - R-120's HR chart appends live band readings each second, with a "Polar live" badge.
+  - Admin: **Bed exit R-120** / **Back in bed** (the existing Phase 4 injector routes R-120's bed exit to the bed-sensor path when the simulated band is off).
+  - `/api/devices`, `POST /api/devices/bed/{id}/state`.
+- **Tests**: backend **322** passed: the state machine on synthetic traces (tilt/energy/burst modes, rolling over, missing gravity, prep pauses, restlessness), the ingest protocol, clock clamping, COPY/null encoding, the writer's retry, the WS round trip, the alert → Cortex trigger + debounce, and that the template citation is verbatim in R-120's care plan. Frontend **41** passed: the BLE parser (8/16-bit, contact bits, RR, energy, truncation), the motion summary, calibration steps, the live-HR trail and appending it to charts. `make lint` is clean.
+
+Verified against the running dev stack (scripted Polar + iPhone clients over `/ws/ingest`, Force night on):
+- Band HR reaches `/vitals` (vitals_1m real-time cagg) in 0.3–3 s. The chart shows it in ~1 s through `/ws/live`.
+- Exit timeline, measured on `/ws/live`:
+  - +3.0 s after getting up: exit detected (1-s summaries + 2-s tilt confirm).
+  - +3.5 s: `bed_exit` event stored.
+  - **+4.2 s: R-120 #1 CRITICAL 90** (was +7.1 s before the latency fixes).
+  - +15 s: Cortex card.
+- Cortex card: "Out of bed alone, hip precautions, high fall risk". Checks include "Confirm bed alarm and walker are in place". It cites "Fall precautions: bed alarm; assist ×1 to bathroom; walker at bedside; non-skid socks." and "Hip precautions: must call for help to get out of bed; never up alone."
+- `/bed/120` in a mobile viewport with synthetic motion events: in bed → Out of bed → back in bed. The permission-denied path shows its message.
+
+Known issues:
+- **Not yet tested with the real Polar band or iPhone** (no hardware in this session). The thresholds come from calibration, but under-mattress placement may only reach the 10-s fallback mode; under the pillow is the intended spot.
+- **Tiger round trip is ~280 ms from this Mac.** The evaluator cycle averages ~1.2 s (max 3.7 s; pre-existing), and it dominates the exit → #1 latency.
+- After a test exit, R-120 stays at 90 for 5 min after returning to bed (the Phase 3 rule hold) unless a check is logged.
+- `PUBLIC_URL` is re-read per request in `make dev`. In Docker, the container's env is fixed at start, so restart it (on Vultr it is the fixed domain anyway).
+- Polar ACC/PPI via the PMD service is requested but not used (P2).
 
 **Phase 6 (care plans, Cortex Search, AI assessment): done**
 

@@ -1,6 +1,7 @@
 // Types and pure helpers for the /ws/live stream (server → client).
 import type {
   AlertMessage,
+  DeviceMessage,
   EventMessage,
   InjectionMessage,
   InsightMessage,
@@ -35,7 +36,8 @@ export type LiveMessage =
   | SimMessage
   | InjectionMessage
   | EventMessage
-  | InsightMessage;
+  | InsightMessage
+  | DeviceMessage;
 
 /** An alert waiting in the toast stack. */
 export type ToastAlert = AlertMessage & { key: string; receivedAt: number };
@@ -58,9 +60,14 @@ export type LiveState = {
   lastEvent: EventMessage | null;
   lastInjection: InjectionMessage | null;
   lastInsight: InsightMessage | null;
+  /** Newest live device reading per `${resident_id}:${device}`, stamped with when it arrived. */
+  devices: Record<string, DeviceMessage & { receivedAt: number }>;
+  /** Live device heart rate per resident: [epoch ms, bpm], the last LIVE_HR_WINDOW_MS. */
+  liveHr: Record<number, [number, number][]>;
 };
 
 export const MAX_INTERVALS = 30;
+export const LIVE_HR_WINDOW_MS = 10 * 60_000;
 export const MAX_TOASTS = 4;
 
 export const initialLiveState: LiveState = {
@@ -75,6 +82,8 @@ export const initialLiveState: LiveState = {
   lastEvent: null,
   lastInjection: null,
   lastInsight: null,
+  devices: {},
+  liveHr: {},
 };
 
 const KNOWN_TYPES = new Set<LiveMessage["type"]>([
@@ -86,6 +95,7 @@ const KNOWN_TYPES = new Set<LiveMessage["type"]>([
   "injection",
   "event",
   "insight",
+  "device",
 ]);
 
 export function liveSocketUrl(
@@ -160,6 +170,13 @@ export function applyMessage(
       return { lastInjection: msg };
     case "insight":
       return { lastInsight: msg };
+    case "device": {
+      const devices = { ...state.devices, [`${msg.resident_id}:${msg.device}`]: { ...msg, receivedAt } };
+      if (msg.device !== "polar" || typeof msg.hr !== "number") return { devices };
+      const t = Date.parse(msg.reading_ts);
+      const trail = (state.liveHr[msg.resident_id] ?? []).filter(([at]) => at > t - LIVE_HR_WINDOW_MS && at < t);
+      return { devices, liveHr: { ...state.liveHr, [msg.resident_id]: [...trail, [t, msg.hr]] } };
+    }
     case "event": {
       // A logged check answers that resident's alert.
       const rid = msg.event.resident_id;

@@ -19,8 +19,11 @@ import {
   ZONE,
 } from "@/lib/chart-options";
 import type { AnomalyBucket, AnomalyResponse, VitalBaselines, VitalsResponse } from "@/lib/types";
+import { useNow } from "@/hooks/use-now";
+import { useLiveStore } from "@/store/live";
 import {
   anomalyPoints,
+  appendLive,
   BUCKET_MS,
   baselineBand,
   deltaVsBaseline,
@@ -39,6 +42,10 @@ type Props = { residentId: number; baselines: VitalBaselines; copd: boolean; pro
 export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
   const [range, setRange] = useState<RangeKey>("6h");
   const [data, setData] = useState<VitalsResponse | null>(null);
+  const [fetchedAt, setFetchedAt] = useState(0);
+  const liveHr = useLiveStore((s) => s.liveHr[residentId]);
+  const polar = useLiveStore((s) => s.devices[`${residentId}:polar`]);
+  const now = useNow();
   const [anomalies, setAnomalies] = useState<AnomalyBucket[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,7 +64,9 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
         .then((r) => r.items)
         .catch(() => null);
       try {
+        const asked = Date.now();
         setData(await getJSON<VitalsResponse>(`/api/residents/${residentId}/vitals?${q}`, ctrl.signal));
+        setFetchedAt(asked);
         setError(null);
       } catch (e) {
         if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : "Could not load vitals");
@@ -80,7 +89,6 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
     const ts = data.ts.map((t) => Date.parse(t));
     const s = data.series;
     const longRange = range !== "6h";
-    const hrBand = baselineBand(ts, baselines, "hr");
     const rrBand = baselineBand(ts, baselines, "rr");
     const skinDelta = s.skin_temp ? deltaVsBaseline(ts, s.skin_temp, baselines, "skin_temp") : [];
     // Snowflake overlays: the model's expected range (99 % interval) and the buckets it flagged.
@@ -95,9 +103,13 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
     const dots = (m: "hr" | "rr" | "spo2" | "skin_temp" | "motion", v: (number | null)[] | undefined) =>
       v && a.length ? anomalyPoints(ts, v, a, m) : [];
     const flagged = a.filter((b) => b.anomalous.length > 0).length;
+    // A live device (the presenter's Polar band) adds its 1-s readings after the last fetch.
+    const hr = longRange || !s.hr ? { ts, values: s.hr ?? [] } : appendLive(ts, s.hr, liveHr, fetchedAt);
+    const hrBand = baselineBand(hr.ts, baselines, "hr");
+    const hrExp = a.length ? expectedBand(hr.ts, step, a, "hr") : undefined;
     return {
-      hr: hasData(s.hr)
-        ? bandedLineOption({ ts, values: s.hr!, band: hrBand, name: "Heart rate", unit: " bpm", digits: 0, longRange, height: 200, expected: exp("hr"), anomalies: dots("hr", s.hr) })
+      hr: hasData(hr.values)
+        ? bandedLineOption({ ts: hr.ts, values: hr.values, band: hrBand, name: "Heart rate", unit: " bpm", digits: 0, longRange, height: 200, expected: hrExp, anomalies: dots("hr", s.hr) })
         : null,
       rr: hasData(s.rr)
         ? bandedLineOption({ ts, values: s.rr!, band: rrBand, name: "Resp. rate", unit: "/min", digits: 1, longRange, height: 150, expected: exp("rr"), anomalies: dots("rr", s.rr) })
@@ -114,7 +126,7 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
       bed: hasData(s.in_bed) ? inBedOption({ ts, values: s.in_bed!, longRange, height: 70 }) : null,
       snowflake: { buckets: a.length, flagged, stepMin: Math.round(step / 60_000), bucketMin: BUCKET_MS / 60_000 },
     };
-  }, [data, anomalies, baselines, copd, range]);
+  }, [data, anomalies, baselines, copd, range, liveHr, fetchedAt]);
 
   const group = `resident-${residentId}`;
   const usual = <LegendSwatch color={BAND} label={`${pronoun} usual range (p05–p95)`} band />;
@@ -167,6 +179,12 @@ export function VitalsCharts({ residentId, baselines, copd, pronoun }: Props) {
             option={charts.hr}
             legend={
               <span className="flex flex-wrap gap-3">
+                {polar && now !== null && now - polar.receivedAt < 5000 && (
+                  <span className="flex items-center gap-1.5 text-sm font-medium text-rose-200">
+                    <span className="size-2 animate-pulse rounded-full bg-rose-400" aria-hidden />
+                    Polar live{typeof polar.hr === "number" ? ` · ${polar.hr} bpm` : ""}
+                  </span>
+                )}
                 <LegendSwatch color={LINE} label="Heart rate" />
                 {usual}
                 {sf}

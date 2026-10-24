@@ -103,6 +103,56 @@ export type ResidentEvent = {
 /** A check or note just logged from the UI. */
 export type EventMessage = { type: "event"; ts: string; event: ResidentEvent & { resident_id: number } };
 
+/** /ws/live: a live device reading (Polar band or iPhone bed sensor) just arrived on /ws/ingest. */
+export type DeviceMessage = {
+  type: "device";
+  ts: string;
+  resident_id: number;
+  device: "polar" | "phone";
+  reading_ts: string;
+  hr?: number | null;
+  worn?: boolean | null;
+  in_bed?: boolean | null;
+  state?: string;
+  level?: number;
+  bed_motion?: number;
+  energy?: number;
+};
+
+/** GET /api/devices */
+export type DeviceStatus = {
+  kind: "polar" | "phone";
+  resident_id: number;
+  sockets: number;
+  last_seen: string | null;
+  age_s: number | null;
+  online: boolean;
+  readings: number;
+  last: Record<string, unknown>;
+};
+
+export type BedCalibration = {
+  quiet_energy: number;
+  burst_jolt: number;
+  tilt_sep_deg: number;
+  tilt_noise_deg: number;
+  empty_energy: number | null;
+  still_energy: number | null;
+  calibrated: boolean;
+  warnings: string[];
+  mode: "tilt" | "energy" | "burst";
+};
+
+export type DevicesResponse = {
+  live_resident_id: number;
+  public_url: string | null;
+  bed_url: string | null;
+  simulated_band: boolean;
+  devices: DeviceStatus[];
+  bed: Record<string, { in_bed: boolean; calibrating: string | null; calibration: BedCalibration }>;
+  stats: { phase: string; rows_written: number; events_written: number; last_flush_ms: number | null; last_error: string | null };
+};
+
 export type InjectionMessage = {
   type: "injection";
   ts: string;

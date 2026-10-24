@@ -18,10 +18,11 @@ slow/down (AGENTS.md rule 5): built only from the deterministic factors, the cod
 care-plan profile, in the same JSON shape as the Cortex output. Callers wait at most ASSESS_TIMEOUT_S (8 s);
 a slower Cortex call keeps running and its result replaces the template when it lands.
 
-Triggers (`Assessor.run`, every SCAN_INTERVAL_S in live mode): a resident's tier rises into HIGH/CRITICAL;
-a top-5 (non-STABLE) resident whose assessment is > 15 min old; the card's Refresh button
-(`POST /api/explain/{id}`). Debounced: one call in flight per resident, automatic triggers at most every
-2 min (tier rise) / 15 min (stale) per resident.
+Triggers: a live alert (the evaluator calls `Assessor.on_alert` the moment it raises one, e.g. R-120's live
+bed exit, so the card is on its way within the same second); every SCAN_INTERVAL_S in live mode
+(`Assessor.run`), a tier rise into HIGH/CRITICAL the alert path missed and a top-5 (non-STABLE) resident whose
+assessment is > 15 min old; the card's Refresh button (`POST /api/explain/{id}`). Debounced: one call in
+flight per resident, automatic triggers at most every 30 s (new rule) / 2 min (tier rise) / 15 min (stale).
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from app.deep.sync import BUCKET, naive_utc
 from app.scoring import evaluator as ev
 from app.scoring.baseline import BLOCK_NAMES, VITAL_METRICS, Baselines, tod_block
 from app.scoring.priority import TIER_RANK
+from app.sim.care_plans import MOBILITY_TEXT
 from app.ws.hub import hub
 
 log = logging.getLogger(__name__)
@@ -132,19 +134,32 @@ def template_assessment(resident: dict, current: dict | None) -> dict:
     escalation = CODE_STATUS_ESCALATION.get(code, "")
     if tier in ("HIGH", "CRITICAL") and profile.get("escalation"):
         escalation = f"{escalation} Care plan: {profile['escalation']}"
+    keys = {_check_key(f.get("key", "")) for f in factors} | {str((current.get("rule") or {}).get("rule") or "")}
     return {
         "headline": headline,
         "assessment": assessment,
         "possible_concerns": [],
         "recommended_checks": checks[:4],
         "escalation": escalation,
-        "care_plan_citations": [],
+        "care_plan_citations": fall_citations(resident) if keys & FALL_KEYS else [],
         "confidence": "low",
-        "caveats": "Built from Vigil's scoring factors only; not a clinical assessment. "
-        "The Snowflake Cortex assessment with care-plan citations replaces it when available.",
+        "caveats": "Built from Vigil's scoring factors and the care plan's fixed fields only; not a clinical "
+        "assessment. The Snowflake Cortex assessment replaces it when available.",
         "source": "template",
         "model": TEMPLATE_MODEL,
     }
+
+
+def fall_citations(resident: dict) -> list[dict]:
+    """The care plan's mobility and fall-precaution lines, worded exactly as `care_plans.build_care_plan` writes
+    them from the same roster fields, so the template can cite them while Cortex is still working."""
+    section = "Mobility and fall precautions"
+    out = []
+    if line := MOBILITY_TEXT.get(str(resident.get("mobility") or "")):
+        out.append({"section": section, "quote": line})
+    if precautions := (resident.get("profile") or {}).get("fall_precautions"):
+        out.insert(0, {"section": section, "quote": f"Fall precautions: {'; '.join(precautions)}."})
+    return out
 
 
 # =========================================================================== Cortex assessment
@@ -155,6 +170,7 @@ SEARCH_TIMEOUT_S = 4.0
 MAX_AGE = timedelta(minutes=60)  # an assessment older than this (vs as_of) is not shown; the template is
 STALE_AFTER = timedelta(minutes=15)  # top-5 residents are re-assessed after this
 RISE_DEBOUNCE_S = 120.0
+ALERT_DEBOUNCE_S = 30.0
 STALE_RETRY_S = 15 * 60.0
 SCAN_INTERVAL_S = 10.0
 TOP_N = 5
@@ -357,6 +373,8 @@ async def build_context(
         "priority": None if not cur else {
             "score": round(float(cur.get("score") or 0)), "tier": cur.get("tier"),
             "rule": (cur.get("rule") or {}).get("text"),
+            "fall_situation": bool(FALL_KEYS & ({str((cur.get("rule") or {}).get("rule") or "")}
+                                                | {_check_key(f.get("key", "")) for f in cur.get("factors") or []})),
             "top_factors": [f["text"] for f in cur.get("factors") or []],
             "anomaly_source": comps.get("anom_source"),
             "anomalous_metrics": comps.get("anomalous_metrics") or [],
@@ -466,6 +484,9 @@ def render_context(ctx: dict) -> str:
     if ctx["care_plan"]:
         for c in ctx["care_plan"]:
             lines.append(f"[section: {c['section']}]\n{c['chunk']}")
+        if p and p.get("fall_situation"):
+            lines += ["", "NOTE: this is a getting-up / fall situation: among your citations, quote the care plan's "
+                      "fall-precautions line (the one naming the precautions and assistance needed) verbatim."]  # fmt: skip
     else:
         lines.append("(care plan not available right now)")
     return "\n".join(lines)
@@ -582,6 +603,7 @@ class Assessor:
         self.last_attempt: dict[int, float] = {}  # monotonic start of the newest automatic attempt
         self.seen_tier: dict[int, str] = {}
         self.stats = AssessStats()
+        self.triggers = False  # automatic triggers (on alert, scan); set by start() when Snowflake is configured
         self._sem = asyncio.Semaphore(CONCURRENCY)
         self._durations: list[float] = []
         self._background: set[asyncio.Task] = set()  # fire-and-forget writes, held so they aren't GC'd
@@ -760,6 +782,20 @@ class Assessor:
 
     # ---- automatic triggers
 
+    def on_alert(self, rid: int, tier: str, *, rule: bool = False) -> asyncio.Task | None:
+        """The evaluator just raised a live alert: assess now (the card shows the template meanwhile). A new rule
+        (bed exit, fall) re-assesses after 30 s; a score-driven rise keeps the scan's 2-min debounce."""
+        from app.state import sim_state
+
+        if not self.triggers or sim_state.mode != "live" or self.pending(rid):
+            return None
+        now = time.monotonic()
+        if now - self.last_attempt.get(rid, -1e9) < (ALERT_DEBOUNCE_S if rule else RISE_DEBOUNCE_S):
+            return None
+        self.last_attempt[rid] = now
+        self.seen_tier[rid] = tier  # the scan must not count this rise again
+        return self.request(rid, None, "alert")
+
     def scan(self, items: list[tuple[int, str, int]], at: datetime) -> list[tuple[int, str]]:
         """(resident_id, tier, rank) of the live queue → residents to assess now, with the trigger name.
         Tier rise into HIGH/CRITICAL (debounced 2 min), or a top-5 non-STABLE resident whose newest assessment
@@ -833,4 +869,5 @@ def start() -> asyncio.Task | None:
         a.stats.phase = "disabled"
         return None
     triggers = settings.assess_enabled and settings.snowflake_configured
+    a.triggers = triggers
     return asyncio.create_task(a.run(triggers=triggers), name="assessor")

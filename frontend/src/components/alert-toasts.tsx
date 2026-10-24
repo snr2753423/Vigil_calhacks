@@ -2,6 +2,7 @@
 
 import { X } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { cn } from "cn";
 
@@ -22,21 +23,23 @@ export function AlertToasts() {
   const sound = usePrefs((s) => s.sound);
   const now = useNow();
   const chimed = useRef(new Set<string>());
+  const bedPage = usePathname().startsWith("/bed/"); // the phone under the pillow stays silent
 
   useEffect(() => {
     for (const a of alerts) {
       if (a.sound && !chimed.current.has(a.key)) {
         chimed.current.add(a.key);
-        if (sound) playCriticalChime();
+        if (sound && !bedPage) playCriticalChime();
       }
     }
-  }, [alerts, sound]);
+  }, [alerts, sound, bedPage]);
 
   useEffect(() => {
     if (now === null) return;
     for (const a of alerts) if (a.tier !== "CRITICAL" && now - a.receivedAt > HIGH_TTL_MS) dismiss(a.key);
   }, [now, alerts, dismiss]);
 
+  if (bedPage) return null;
   return (
     <div
       className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex flex-col items-stretch gap-2 p-3 sm:inset-x-auto sm:right-0 sm:bottom-auto sm:top-20 sm:w-[26rem]"

@@ -4,7 +4,7 @@ import { offsetForDisplayTime } from "@/lib/display-clock";
 import { describeEvent } from "@/lib/events";
 import { formatMinutes } from "@/lib/format";
 import type { AnomalyBucket } from "@/lib/types";
-import { anomalyPoints, baselineBand, deltaVsBaseline, expectedBand, spo2Zones, todBlock } from "@/lib/vitals";
+import { anomalyPoints, appendLive, baselineBand, deltaVsBaseline, expectedBand, spo2Zones, todBlock } from "@/lib/vitals";
 
 const baselines = {
   hr: { "0": { p05: 55, p50: 60, p95: 70 }, "3": { p05: 65, p50: 72, p95: 85 } },
@@ -91,5 +91,19 @@ describe("Snowflake overlays", () => {
     expect(pts[0].value).toBe(83);
     expect(pts[0].severity).toBe(0.6);
     expect(anomalyPoints(ts, values, buckets, "rr")).toEqual([]);
+  });
+});
+
+describe("appendLive", () => {
+  it("appends readings newer than the fetch and the last bucket", () => {
+    const out = appendLive([0, 60_000], [70, 71], [[30_000, 1], [61_000, 72], [62_000, 73]], 50_000);
+    expect(out).toEqual({ ts: [0, 60_000, 61_000, 62_000], values: [70, 71, 72, 73] });
+  });
+
+  it("returns the series unchanged without fresh readings", () => {
+    const ts = [0, 60_000];
+    const values = [70, null];
+    expect(appendLive(ts, values, undefined, 0)).toEqual({ ts, values });
+    expect(appendLive(ts, values, [[10, 80]], 100)).toEqual({ ts, values });
   });
 });

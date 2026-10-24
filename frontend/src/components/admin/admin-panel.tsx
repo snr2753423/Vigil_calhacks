@@ -1,6 +1,6 @@
 "use client";
 
-import { Clock, Moon, Pause, Play, RotateCcw, WatchIcon } from "lucide-react";
+import { BedDouble, Clock, Footprints, Moon, Pause, Play, RotateCcw, WatchIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "cn";
 
@@ -99,6 +99,19 @@ export function AdminPanel() {
               Simulated band for R-120
             </BigButton>
             <span className="text-sm text-muted-foreground">Fallback when the Polar band or iPhone isn&apos;t available.</span>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <BigButton icon={Footprints} onClick={() => act("Bed exit recorded for R-120", "/api/sim/inject", { kind: "bed_exit", resident_id: 120 })}>
+              Bed exit R-120
+            </BigButton>
+            {!sim?.simulated_band && (
+              <BigButton icon={BedDouble} onClick={() => act("R-120 back in bed", "/api/devices/bed/120/state", { in_bed: true })}>
+                Back in bed
+              </BigButton>
+            )}
+            <span className="text-sm text-muted-foreground">
+              {sim?.simulated_band ? "Simulated: gets up and walks." : "Fallback for the iPhone sensor: recorded as if it saw the exit."}
+            </span>
           </div>
         </Panel>
 

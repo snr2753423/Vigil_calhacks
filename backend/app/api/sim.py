@@ -5,6 +5,8 @@ import time
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.api import devices
+from app.devices.ingest import LIVE_RESIDENTS
 from app.scoring import evaluator as ev
 from app.sim import injectors, live_loop
 from app.state import sim_state
@@ -73,7 +75,11 @@ class Inject(BaseModel):
 
 @router.post("/inject", status_code=201)
 async def inject(body: Inject) -> dict:
-    """Start a scenario for one resident now: fall · sepsis_drift · remove_band · bed_exit."""
+    """Start a scenario for one resident now: fall · sepsis_drift · remove_band · bed_exit. A bed exit for R-120
+    while his real devices are in use (simulated band off) is recorded through the bed-sensor path instead."""
+    if body.kind == "bed_exit" and body.resident_id in LIVE_RESIDENTS and not sim_state.simulated_band:
+        # R-120 streams from the real devices: record the exit through the bed-sensor path (hardware fallback)
+        return {"kind": "bed_exit", "via": "bed_sensor", **await devices.record_bed_change(body.resident_id, False)}
     live = live_loop.live
     if live is None or live.stats.phase in ("disabled", "standby"):
         raise HTTPException(409, "the live simulator is not running in this backend")
@@ -99,10 +105,13 @@ async def simulated_band(body: Toggle | None = None) -> dict:
 
 @router.post("/reset")
 async def reset() -> dict:
-    """Back to the plain live demo: end all injected scenarios, unpause, night mode and display offset off,
-    simulated band off. Stored history is untouched (`make seed` regenerates it)."""
+    """Back to the plain live demo: end all injected scenarios (R-120 back in bed), unpause, night mode and
+    display offset off, simulated band off. Stored history is untouched (`make seed` regenerates it)."""
     live = live_loop.live
     cleared = live.clear_injections() if live else 0
+    if not sim_state.simulated_band:  # an admin bed exit for R-120 ends too (the real bed sensor would see a return)
+        for rid in LIVE_RESIDENTS:
+            await devices.record_bed_change(rid, True)
     sim_state.paused = False
     sim_state.force_night = False
     sim_state.force_night_since = None
