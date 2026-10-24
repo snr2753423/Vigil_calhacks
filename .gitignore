@@ -1,0 +1,17 @@
+# secrets
+.env
+secrets/
+*.pem
+*.p8
+# python
+__pycache__/
+.venv/
+*.pyc
+.pytest_cache/
+# node
+node_modules/
+.next/
+# generated data
+data/care_plans/
+# os
+.DS_Store
