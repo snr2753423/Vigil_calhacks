@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import json
 import logging
@@ -168,6 +169,7 @@ class SnowflakeRest:
         self._client_loop: asyncio.AbstractEventLoop | None = None
         self.inference_blocked_until = 0.0
         self.last_error: str | None = None
+        self._running: set[str] = set()  # SQL API statement handles still running past the synchronous window
 
     # ---- plumbing
 
@@ -311,14 +313,44 @@ class SnowflakeRest:
         t0 = time.monotonic()
         resp = await self._post("/api/v2/statements", body, feature=feature, timeout=timeout + 2)
         # 202: still running past the API's synchronous window (~45 s): poll its status URL until done or timeout.
-        while resp.status_code == 202:
-            url = (resp.json() or {}).get("statementStatusUrl")
-            left = timeout - (time.monotonic() - t0)
-            if not url or left <= 0:
-                raise SnowflakeRestError(202, "statement did not finish in time")
-            await asyncio.sleep(min(POLL_S, max(left, 0.1)))
-            resp = await self._get(url, feature=f"{feature}.poll", timeout=max(left, 1.0) + 2)
+        handle = (resp.json() or {}).get("statementHandle") if resp.status_code == 202 else None
+        if handle:
+            self._running.add(handle)
+        try:
+            while resp.status_code == 202:
+                url = (resp.json() or {}).get("statementStatusUrl")
+                left = timeout - (time.monotonic() - t0)
+                if not url or left <= 0:
+                    if handle:  # don't leave it running (and holding the warehouse) after we gave up on it
+                        with contextlib.suppress(Exception):
+                            await self._cancel_statement(handle)
+                    raise SnowflakeRestError(202, "statement did not finish in time")
+                await asyncio.sleep(min(POLL_S, max(left, 0.1)))
+                resp = await self._get(url, feature=f"{feature}.poll", timeout=max(left, 1.0) + 2)
+        finally:
+            if handle:
+                self._running.discard(handle)
         return resp.json()
+
+    async def _cancel_statement(self, handle: str) -> None:
+        await self._post(f"/api/v2/statements/{handle}/cancel", {}, feature="sql_api.cancel", timeout=5.0)
+
+    async def cancel_running(self, session_ids: list[int], *, timeout: float = 5.0) -> dict[str, int]:
+        """Shutdown: cancel what this process still has running in Snowflake, so a backend reload or restart never
+        leaves queries behind to stack up on the warehouse. `session_ids` are the connector sessions
+        (`snowflake_sql.open_session_ids()`): each gets SYSTEM$CANCEL_ALL_QUERIES, which runs in Snowflake's cloud
+        services (no warehouse), so it is not queued behind the very queries it cancels. SQL API statements still
+        polled here are cancelled by handle. Errors are swallowed: this is best effort on the way out."""
+        jobs = [self.sql("SELECT SYSTEM$CANCEL_ALL_QUERIES(?::NUMBER)", [sid], feature="sql_api.cancel_session",
+                         timeout=timeout) for sid in session_ids]  # fmt: skip
+        jobs += [self._cancel_statement(h) for h in list(self._running)]
+        if not jobs:
+            return {"sessions": 0, "statements": 0}
+        results = await asyncio.wait_for(asyncio.gather(*jobs, return_exceptions=True), timeout + 1)
+        failed = [r for r in results if isinstance(r, BaseException)]
+        for exc in failed:
+            log.warning("shutdown: cancelling Snowflake queries failed: %s", exc)
+        return {"sessions": len(session_ids), "statements": len(jobs) - len(session_ids), "failed": len(failed)}
 
     async def _get(self, path: str, *, feature: str, timeout: float) -> httpx.Response:
         headers = {

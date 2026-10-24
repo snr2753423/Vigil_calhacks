@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     # Clamped to the seeded history, so a 3-day seed trains on ~2 days.
     anomaly_train_days: float = 12.0
     snowflake_train_warehouse: str | None = None  # optional warehouse for heavy ML: `make train` + FORECAST
+    # Live detection (every closed bucket, ~4–5 min of 10 concurrent queries on XSMALL) queued the interactive calls
+    # (Ask, notes, cards, handoff) for 30–45 s on the shared warehouse. On SNOWFLAKE_WAREHOUSE it now runs at most
+    # this many models at a time; with its own SNOWFLAKE_DETECT_WAREHOUSE, all five in parallel there.
+    anomaly_detect_concurrency: int = 2
+    snowflake_detect_warehouse: str | None = None
 
     # Deep tier: Cortex AI assessment (SPEC §9 ⑤): automatic triggers; Refresh works whenever Snowflake is set
     assess_enabled: bool = True
@@ -66,6 +71,7 @@ class Settings(BaseSettings):
     public_url: str | None = None
     stats_flush_enabled: bool = True  # add Snowflake call counts to Tiger snowflake_calls every 30 s
     device_ingest_enabled: bool = True  # the 1-s device writer (WS /ws/ingest still answers when off)
+    warmup_enabled: bool = True  # fill the slow caches in the background at startup (app/warmup.py); tests turn it off
 
     @property
     def snowflake_private_key_file(self) -> Path:

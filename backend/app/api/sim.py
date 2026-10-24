@@ -103,6 +103,38 @@ async def simulated_band(body: Toggle | None = None) -> dict:
     return await _changed()
 
 
+class Reload(BaseModel):
+    resident_ids: list[int] = Field(default_factory=list, max_length=120)
+
+
+@router.post("/reload")
+async def reload(body: Reload | None = None) -> dict:
+    """After `reset_demo.py` removed live-session test data from Tiger/Snowflake: drop what this process remembers
+    about it, so pages show the clean state without a restart. The named residents' alert-gate state starts fresh
+    (no hysteresis or suppression from a deleted check), the queue headlines and the handoff cache are re-read,
+    and the evaluator reloads its context (baselines, roster)."""
+    from app.db import tiger
+    from app.deep import assess, handoff
+
+    rids = (body or Reload()).resident_ids
+    out: dict = {"gate_reset": 0}
+    if ev.evaluator is not None:
+        for rid in rids:
+            out["gate_reset"] += ev.evaluator.gate.states.pop(rid, None) is not None
+        ev.evaluator.ctx = None
+        ev.evaluator.poke(republish=True)
+    assessor = assess.get_assessor()
+    assessor.latest.clear()
+    try:
+        async with tiger.pooled() as conn:
+            await assessor.load_cache(conn)
+        out["headlines"] = len(assessor.latest)
+    except Exception as exc:  # noqa: BLE001 — the scan refills it within a minute
+        out["headlines_error"] = " ".join(str(exc).split())[:160]
+    handoff._cache.clear()
+    return out
+
+
 @router.post("/reset")
 async def reset() -> dict:
     """Back to the plain live demo: end all injected scenarios (R-120 back in bed), unpause, night mode and

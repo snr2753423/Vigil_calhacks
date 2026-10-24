@@ -330,6 +330,11 @@ class SyncLoop:
                 backoff = min(backoff * 2, 600.0)
 
     async def _cycle(self, tconn: psycopg.AsyncConnection, anomaly) -> None:
+        from app.sim import live_loop
+
+        if live_loop.standby():  # another backend is the primary: it syncs and detects
+            stats.phase = "standby"
+            return
         if not await tiger.try_lock_sync(tconn):  # a seed's bulk load (or another backend) is syncing
             stats.phase = "busy"
             return

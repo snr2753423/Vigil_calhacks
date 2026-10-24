@@ -1,6 +1,6 @@
 # Single origin for Vigil (SPEC §5): /api/* and /ws/* → backend, everything else → frontend.
 # Same file locally, in Docker Compose and on Vultr; only the env vars differ:
-#   SITE_ADDRESS       :8080 locally; your domain on Vultr (Caddy then does auto-HTTPS)
+#   SITE_ADDRESS       :8080 locally; DOMAIN on Vultr (docker-compose.prod.yml; Caddy then does auto-HTTPS)
 #   BACKEND_UPSTREAM   127.0.0.1:8000 locally; backend:8000 in Compose
 #   FRONTEND_UPSTREAM  127.0.0.1:3000 locally; frontend:3000 in Compose
 {
@@ -8,6 +8,9 @@
 }
 
 {$SITE_ADDRESS::8080} {
+	# Compress API JSON (the queue is ~170 KB) and pages for venue wifi; WebSocket upgrades pass through untouched.
+	encode zstd gzip
+
 	@backend path /api/* /ws/*
 	handle @backend {
 		reverse_proxy {$BACKEND_UPSTREAM:127.0.0.1:8000}

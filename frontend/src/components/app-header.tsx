@@ -6,20 +6,12 @@ import { usePathname } from "next/navigation";
 import { cn } from "cn";
 
 import { ConnectionBadge } from "@/components/connection-badge";
+import { NavMenu } from "@/components/nav-menu";
 import { StaffOnDuty } from "@/components/staff-on-duty";
 import { useClock } from "@/hooks/use-clock";
 import { FACILITY_SHORT_NAME, formatFacilityClock } from "@/lib/facility";
 import { useLiveStore } from "@/store/live";
 import { ROLES, type Role, usePrefs } from "@/store/prefs";
-
-const NAV = [
-  { href: "/", label: "Rounds" },
-  { href: "/handoff", label: "Handoff" },
-  { href: "/ask", label: "Ask" },
-  { href: "/devices", label: "Devices" },
-  { href: "/under-the-hood", label: "Under the hood" },
-  { href: "/admin", label: "Admin" },
-];
 
 export function AppHeader() {
   const path = usePathname();
@@ -28,6 +20,8 @@ export function AppHeader() {
   const night = useLiveStore((s) => s.queue?.night ?? false);
   const clock = now === null ? "--:--:--" : formatFacilityClock(now, offsetS);
   if (path.startsWith("/bed/")) return null; // the iPhone bed-sensor page is a standalone tool
+  const moon = night || (!replay && !!sim?.force_night);
+  const clockTitle = replay ? "Replay time (last night)" : sim?.force_night ? "Night mode forced for the demo" : undefined;
 
   return (
     <header className="z-40 border-b sm:sticky sm:top-0 border-border/60 bg-background/90 backdrop-blur">
@@ -36,13 +30,11 @@ export function AppHeader() {
           <span className="text-2xl font-semibold tracking-tight text-teal-300">Vigil</span>
           <span className="hidden text-sm text-muted-foreground sm:inline">{FACILITY_SHORT_NAME}</span>
         </Link>
-        <nav className="flex items-center gap-1" aria-label="Main">
-          {NAV.map((n) => (
-            <NavLink key={n.href} {...n} />
-          ))}
-        </nav>
+        <NavMenu />
+        {/* Phones: logo, menu and clock on the first row, the status controls on the second. */}
+        <Clock clock={clock} moon={moon} title={clockTitle} className="ml-auto flex sm:hidden" />
         <StaffOnDuty />
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:justify-end">
           <span
             className={cn(
               "inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-semibold uppercase ring-1",
@@ -60,35 +52,21 @@ export function AppHeader() {
           <ConnectionBadge />
           <RoleSwitcher />
           <SoundToggle />
-          <div
-            className="flex items-center gap-1.5"
-            title={replay ? "Replay time (last night)" : sim?.force_night ? "Night mode forced for the demo" : undefined}
-          >
-            {(night || (!replay && sim?.force_night)) && <Moon className="size-5 text-indigo-200" aria-label="Night" />}
-            <time className="min-w-[6.2rem] text-right font-mono text-2xl tabular-nums" suppressHydrationWarning>
-              {clock}
-            </time>
-          </div>
+          <Clock clock={clock} moon={moon} title={clockTitle} className="hidden sm:flex" />
         </div>
       </div>
     </header>
   );
 }
 
-function NavLink({ href, label }: { href: string; label: string }) {
-  const path = usePathname();
-  const active = href === "/" ? path === "/" || path.startsWith("/resident") : path.startsWith(href);
+function Clock({ clock, moon, title, className }: { clock: string; moon: boolean; title?: string; className: string }) {
   return (
-    <Link
-      href={href}
-      aria-current={active ? "page" : undefined}
-      className={cn(
-        "flex h-10 items-center rounded-lg px-3 text-base font-medium",
-        active ? "bg-white/10 text-foreground" : "text-muted-foreground hover:bg-white/5 hover:text-foreground",
-      )}
-    >
-      {label}
-    </Link>
+    <div className={cn("items-center gap-1.5", className)} title={title}>
+      {moon && <Moon className="size-5 text-indigo-200" aria-label="Night" />}
+      <time className="text-right font-mono text-xl tabular-nums sm:min-w-[6.2rem] sm:text-2xl" suppressHydrationWarning>
+        {clock}
+      </time>
+    </div>
   );
 }
 

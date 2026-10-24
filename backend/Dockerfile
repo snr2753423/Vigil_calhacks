@@ -17,4 +17,6 @@ RUN uv sync --frozen --no-dev
 
 ENV PATH="/srv/vigil/backend/.venv/bin:$PATH"
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# One worker only: the simulator, evaluator and Snowflake loops are in-process background tasks. Open WebSockets get
+# 5 s to close on shutdown, then the lifespan cancels running Snowflake queries (see app/main.py).
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--timeout-graceful-shutdown", "5"]

@@ -13,6 +13,7 @@ def client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SNOWFLAKE_SYNC_ENABLED", "false")  # …nor sync to / detect in Snowflake
     monkeypatch.setenv("ASSESS_ENABLED", "false")  # …nor call Cortex for AI assessments
     monkeypatch.setenv("DEVICE_INGEST_ENABLED", "false")
+    monkeypatch.setenv("WARMUP_ENABLED", "false")  # …nor warm caches from Tiger / Snowflake at startup
     monkeypatch.setenv(
         "STATS_FLUSH_ENABLED", "false"
     )  # …nor add test call counts to Tiger snowflake_calls  # …nor open the device writer's Tiger connection

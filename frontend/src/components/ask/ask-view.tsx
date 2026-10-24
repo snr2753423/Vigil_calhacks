@@ -7,6 +7,7 @@ import { cn } from "cn";
 
 import { askChartOption, formatCell, prettyColumn } from "@/lib/ask";
 import { getJSON, postJSON } from "@/lib/api";
+import { facilityHHMM } from "@/lib/format";
 import { echarts } from "@/lib/echarts";
 import type { AskResult } from "@/lib/types";
 
@@ -139,6 +140,12 @@ function Answer({ r, onSuggest }: { r: AskResult; onSuggest: (q: string) => void
   const interpretation = r.interpretation.replace(/^This is our interpretation of your question:\s*/i, "").trim();
   return (
     <section className="space-y-3 rounded-2xl bg-card p-4 ring-1 ring-white/10">
+      {r.fallback && (
+        <p className="rounded-lg bg-amber-500/10 p-3 text-base text-amber-100 ring-1 ring-amber-400/30" role="status">
+          Snowflake Cortex Analyst is unreachable right now, so this is the last answer it gave to this question
+          {r.fallback.answered_at ? ` (${facilityHHMM(Date.parse(r.fallback.answered_at))})` : ""}.
+        </p>
+      )}
       {interpretation && (
         <p className="text-base">
           <span className="text-sm text-muted-foreground">Interpreted as: </span>

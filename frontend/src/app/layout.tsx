@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 
 import { AppHeader } from "@/components/app-header";
 import { AlertToasts } from "@/components/alert-toasts";
+import { DemoShortcuts } from "@/components/demo-shortcuts";
 import { LiveSocket } from "@/components/live-socket";
 import { ReplayBanner } from "@/components/replay/replay-banner";
 import "./globals.css";
@@ -37,6 +38,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <ReplayBanner />
         {children}
         <AlertToasts />
+        <DemoShortcuts />
       </body>
     </html>
   );

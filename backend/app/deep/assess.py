@@ -42,6 +42,7 @@ import psycopg
 
 from app.config import Settings, get_settings
 from app.db import tiger
+from app.db.snowflake_rest import Completion
 from app.db.snowflake_rest import client as rest_client
 from app.deep.anomaly import REVEAL_DELAY
 from app.deep.sync import BUCKET, naive_utc
@@ -50,6 +51,7 @@ from app.scoring import evaluator as ev
 from app.scoring.baseline import BLOCK_NAMES, VITAL_METRICS, Baselines, tod_block
 from app.scoring.priority import TIER_RANK
 from app.scoring.trend import annotate as annotate_forecast
+from app.sim import live_loop
 from app.sim.care_plans import MOBILITY_TEXT
 from app.ws.hub import hub
 
@@ -747,30 +749,7 @@ class Assessor:
         live = as_of is None
         at = datetime.now(UTC).replace(microsecond=0) if live else as_of
         t0 = time.perf_counter()
-        async with tiger.pooled() as conn:
-            rows = await tiger.fetch_dicts(conn, "SELECT * FROM residents WHERE resident_id = %s", (rid,))
-            if not rows:
-                raise LookupError(f"no resident {rid}")
-            resident = rows[0]
-            current = current or await ev.current_for(conn, rid, at, live=live)
-            # Cortex Search (Snowflake) runs while the rest of the context is read from Tiger.
-            search = asyncio.create_task(self._care_plan(rid, care_plan_query(resident, current)))
-            try:
-                ctx = await build_context(conn, resident, current, at, self.tz)
-            except BaseException:
-                search.cancel()
-                raise
-        ctx["care_plan"] = await search
-        rest = rest_client()
-        completion = await rest.cortex_complete(
-            messages_for(ctx), RESPONSE_FORMAT, max_tokens=MAX_TOKENS, timeout=CORTEX_TIMEOUT_S
-        )
-        try:
-            raw = completion.json()
-            card = validate(raw, ctx["care_plan"])
-        except (ValueError, InvalidAssessment) as exc:
-            self.stats.invalid += 1
-            raise InvalidAssessment(f"Cortex output rejected: {exc}") from exc
+        card, raw, completion, ctx, current = await self.generate(rid, at, current, live=live)
         self.stats.citations_dropped += len(raw.get("care_plan_citations") or []) - len(card["care_plan_citations"])
         self.stats.wording_rewrites += wording_rewrites(raw, card)
         elapsed = (time.perf_counter() - t0) * 1000
@@ -801,6 +780,37 @@ class Assessor:
         log.info("assess: R-%d (%s) %s in %.1f s via %s · %d citations · %s", rid, trigger, payload["model"],
                  elapsed / 1000, completion.via, len(card["care_plan_citations"]), card["headline"])  # fmt: skip
         return payload
+
+    async def generate(
+        self, rid: int, at: datetime, current: dict | None = None, *, live: bool = False
+    ) -> tuple[dict, dict, Completion, dict, dict | None]:
+        """One Cortex card, not stored: Tiger context + Cortex Search + completion + validation.
+        → (card, raw model JSON, completion, context, the score card explained). `reset_demo.py` uses it as an
+        end-to-end check that leaves nothing behind."""
+        async with tiger.pooled() as conn:
+            rows = await tiger.fetch_dicts(conn, "SELECT * FROM residents WHERE resident_id = %s", (rid,))
+            if not rows:
+                raise LookupError(f"no resident {rid}")
+            resident = rows[0]
+            current = current or await ev.current_for(conn, rid, at, live=live)
+            # Cortex Search (Snowflake) runs while the rest of the context is read from Tiger.
+            search = asyncio.create_task(self._care_plan(rid, care_plan_query(resident, current)))
+            try:
+                ctx = await build_context(conn, resident, current, at, self.tz)
+            except BaseException:
+                search.cancel()
+                raise
+        ctx["care_plan"] = await search
+        completion = await rest_client().cortex_complete(
+            messages_for(ctx), RESPONSE_FORMAT, max_tokens=MAX_TOKENS, timeout=CORTEX_TIMEOUT_S
+        )
+        try:
+            raw = completion.json()
+            card = validate(raw, ctx["care_plan"])
+        except (ValueError, InvalidAssessment) as exc:
+            self.stats.invalid += 1
+            raise InvalidAssessment(f"Cortex output rejected: {exc}") from exc
+        return card, raw, completion, ctx, current
 
     async def _care_plan(self, rid: int, query: str) -> list[dict]:
         """Top care-plan chunks; on failure assess without them rather than not at all."""
@@ -901,7 +911,7 @@ class Assessor:
         while True:
             await asyncio.sleep(SCAN_INTERVAL_S)
             queue = ev.evaluator.latest if ev.evaluator is not None else None
-            if queue is None or sim_state.mode != "live" or sim_state.paused:
+            if queue is None or sim_state.mode != "live" or sim_state.paused or live_loop.standby():
                 continue
             items = [(it.profile.resident_id, it.tier, i) for i, it in enumerate(queue.items, 1)]
             for rid, trigger in self.scan(items, queue.as_of):

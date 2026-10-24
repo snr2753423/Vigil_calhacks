@@ -38,6 +38,7 @@ from app.scoring.baseline import Baselines
 from app.scoring.features import Profile, ResidentFeatures, build_features
 from app.scoring.priority import TIER_ENTER, TIER_RANK, TIERS, PriorityResult, Tier, tier_for_score
 from app.scoring.rules import NightClock, RuleHit
+from app.sim import live_loop
 from app.sim.physiology import STILL_MOTION_PER_MIN
 from app.state import sim_state
 from app.ws.hub import hub
@@ -623,6 +624,7 @@ class Evaluator:
         self.latest = queue
         # Publish first, store second: the UI (and Cortex) shouldn't wait on the snapshot write's round trips.
         # During a replay the facility keeps being scored and stored live, but /ws/live shows the replay.
+        standby = live_loop.standby()  # another backend is the primary: show, but store and trigger nothing
         if sim_state.mode == "live":
             await self._publish(queue, clock)
             assessor = assess.get_assessor()
@@ -630,11 +632,14 @@ class Evaluator:
                 if sim_state.mode != "live":  # a replay started while we were broadcasting
                     break
                 await hub.broadcast(a)
+                if standby:
+                    continue
                 assessor.on_alert(
                     a["resident_id"], a["tier"], rule=bool(a["new_rules"])
                 )  # Cortex now, not on the 10-s scan
                 forecast.get_forecaster().on_alert(a["resident_id"], a["tier"])  # Snowflake FORECAST → P_trend
-        await self._write(conn, queue, events)
+        if not standby:
+            await self._write(conn, queue, events)
         total = (time.perf_counter() - t0) * 1000
         queue.total_ms = total
         self._record(queue, total)

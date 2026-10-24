@@ -19,11 +19,13 @@ import re
 import shutil
 import tempfile
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app.config import BACKEND_DIR
 from app.db import snowflake_sql as sf
+from app.db import tiger
 from app.db.snowflake_rest import SEMANTIC_MODEL_FILE
 from app.db.snowflake_rest import client as rest_client
 
@@ -152,6 +154,41 @@ def parse_message(body: dict) -> dict:
             out["suggestions"] = list(item.get("suggestions") or [])
     out["interpretation"] = "\n\n".join(t for t in texts if t).strip()
     return out
+
+
+# --------------------------------------------------------------------------- last good answers (offline fallback)
+
+ANSWERS_KEY = "ask_answers"  # Tiger sim_meta: {question (normalised): result}
+MAX_SAVED = 25
+
+
+def _norm(question: str) -> str:
+    return " ".join(question.lower().split()).rstrip(" ?.!")
+
+
+async def remember(result: dict) -> None:
+    """Keep a successful answer (SQL ran, no error) so /ask can still show it while Snowflake is unreachable."""
+    if not result.get("sql") or result.get("error"):
+        return
+    saved = result | {"answered_at": datetime.now(UTC).isoformat(timespec="seconds")}
+    try:
+        async with tiger.pooled() as conn:
+            answers = await tiger.get_meta(conn, ANSWERS_KEY) or {}
+            answers[_norm(result["question"])] = saved
+            if len(answers) > MAX_SAVED:  # keep the newest
+                answers = dict(sorted(answers.items(), key=lambda kv: kv[1].get("answered_at", ""))[-MAX_SAVED:])
+            await tiger.set_meta(conn, ANSWERS_KEY, answers)
+    except Exception as exc:  # noqa: BLE001 — the answer was already given; storing it is a convenience
+        log.info("analyst: could not store the answer: %s", exc)
+
+
+async def recall(question: str) -> dict | None:
+    try:
+        async with tiger.pooled() as conn:
+            answers = await tiger.get_meta(conn, ANSWERS_KEY) or {}
+    except Exception:  # noqa: BLE001
+        return None
+    return answers.get(_norm(question))
 
 
 # --------------------------------------------------------------------------- ask

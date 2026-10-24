@@ -8,6 +8,7 @@ import contextlib
 import io
 import threading
 import time
+import weakref
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -23,6 +24,14 @@ from app.config import BACKEND_DIR, Settings, get_settings
 
 LOGIN_TIMEOUT_S = 30
 MIGRATIONS_DIR = BACKEND_DIR / "sql" / "snowflake"
+
+# The backend turns this on at startup (app/main.py): its sessions then set ABORT_DETACHED_QUERY, so a query whose
+# process died without cancelling it (kill -9, a crash) is aborted by Snowflake once the client stops polling,
+# instead of running on for minutes. Scripts leave it off: `make train` must survive a laptop that naps.
+abort_detached = False
+
+_open_lock = threading.Lock()
+_open: "weakref.WeakSet[snowflake.connector.SnowflakeConnection]" = weakref.WeakSet()
 
 
 class SnowflakeNotConfigured(RuntimeError):
@@ -105,7 +114,7 @@ def connect(settings: Settings | None = None, warehouse: str | None = None) -> s
     if not key_file.is_file():
         raise SnowflakeNotConfigured(f"private key not found at {key_file} (run `make keygen`)")
     with call_stats.timed("connect"):
-        return snowflake.connector.connect(
+        conn = snowflake.connector.connect(
             account=settings.snowflake_account,
             user=settings.snowflake_user,
             authenticator="SNOWFLAKE_JWT",
@@ -117,7 +126,29 @@ def connect(settings: Settings | None = None, warehouse: str | None = None) -> s
             application="vigil",
             # Explicit to silence the connector's FutureWarning; we run no async queries, so always log out on close.
             enable_server_session_keep_alive_auto_detection=False,
+            session_parameters={"ABORT_DETACHED_QUERY": True} if abort_detached else None,
         )
+    with _open_lock:
+        _open.add(conn)
+    return conn
+
+
+def open_session_ids() -> list[int]:
+    """Snowflake session ids of this process's open connector connections. On shutdown the backend cancels their
+    running queries (`snowflake_rest.cancel_sessions`), so a reload doesn't leave DETECT_ANOMALIES or a FORECAST
+    training running and queueing the warehouse behind the next process's runs."""
+    with _open_lock:
+        conns = list(_open)
+    return [c.session_id for c in conns if c.session_id and not c.is_closed()]
+
+
+def close_all() -> None:
+    """Log out every open connector connection (after their queries were cancelled)."""
+    with _open_lock:
+        conns = list(_open)
+    for c in conns:
+        with contextlib.suppress(Exception):
+            c.close()
 
 
 class SharedConnection:

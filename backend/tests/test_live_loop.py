@@ -52,10 +52,12 @@ def test_rebuild_only_when_the_seed_or_scripted_night_changes(loop: LiveLoop) ->
 
 def test_staff_events_are_never_ahead_of_the_tick(loop: LiveLoop) -> None:
     """Live steps emit an event only once its tick has happened: (t0 - 5 s, t0] for a 1-tick step."""
-    t0, ids, seen = current_tick() - 3600, loop.active_ids()[:12], 0
-    for i in range(720):
+    # 3 h, not 1: rounds come every 2 h (±20 min), so a 1-h window right after one held no events at all for these
+    # residents (the test failed depending on the time of day it ran).
+    t0, ids, seen = current_tick() - 3 * 3600, loop.active_ids()[:12], 0
+    for i in range(3 * 720):
         tick = t0 + 5 * i
         for batch in loop._generate(ids, tick, 1):
             assert all(tick - 5 < e.ts <= tick for e in batch.events)
             seen += len(batch.events)
-    assert seen  # an hour always holds round checks for some of these residents
+    assert seen  # 3 h always hold a round's checks for some of these residents

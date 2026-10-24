@@ -1,11 +1,113 @@
 # Vigil
 
-Vigil watches every resident of a nursing home around the clock, learns each resident's personal "normal," and gives the night shift a live, ranked list of **who to check next and why**. It is decision support that catches decline earlier. It does not diagnose and does not replace staff.
+**Vigil watches every resident of a nursing home around the clock, learns each resident's personal "normal," and gives the night shift a live, ranked list of who to check next and why.** It is decision support that catches decline earlier. It does not diagnose and does not replace staff. All data is synthetic.
 
-- **Fast tier: Tiger Data (TimescaleDB).** Live ingest, continuous aggregates, hard rules, scored every few seconds.
-- **Deep tier: Snowflake.** Anomaly detection against each resident's own baseline, forecasts, Cortex AI explanations with care-plan citations.
+Built solo for Cal Hacks 13.0. It targets **[MLH] Best Use of Tiger Data** and **[MLH] Best Use of Snowflake API**.
 
-`SPEC.md` is the source of truth. `AGENTS.md` has the rules for coding agents, and `BUILD_PROMPTS.md` lists the build phases. All data is synthetic.
+## The problem
+
+A skilled nursing facility's night shift is often **one aide for 30+ residents**, walking fixed rounds every two hours. Residents decline *between* rounds, and in the elderly that decline is often silent. A urinary infection on its way to sepsis shows up as restlessness, a modest heart-rate rise and a little confusion, not a fever. Fixed alarm thresholds miss it: "HR > 100" never fires for an 87-year-old whose normal is 62. The same thresholds ring all night for residents whose normal is unusual (COPD, beta-blockers, AFib), so staff learn to ignore them.
+
+## What it does
+
+- **Rounds queue:** every resident ranked by a 0–100 priority score with a tier (CRITICAL / HIGH / WATCH / STABLE), the **top 3 reasons** computed deterministically from the data (e.g. "HR 84 (her expected 67–79)", "5 bed exits (usual ≤ 2)"), time since the last check, and an AI summary.
+- **Resident page:** charts against the resident's own baseline band, Snowflake's expected range and anomaly dots, a forecast line, a NEWS2 table, and a Snowflake Cortex assessment that quotes the resident's care plan (code status, fall precautions, escalation preferences).
+- **Live hardware:** a Polar Verity Sense band streams heart rate from Mac Chrome (Web Bluetooth). An iPhone under the pillow is the bed sensor (DeviceMotion). Getting out of bed at night puts a high-fall-risk resident at #1 within about 4 s.
+- **Replay:** last night's recorded data runs through the live pipeline at 30–120× with bookmarks, so the whole story fits in a 3-minute demo.
+- **Shift handoff** (SBAR via `AI_AGG`), **voice and text nurse notes** (`AI_TRANSCRIBE` + `AI_EXTRACT`), **Ask the facility** (Cortex Analyst), and an **Under the hood** page that proves every number with a live query.
+
+## How it works: two speeds
+
+```
+Simulator (119 residents, every 5 s) ─┐
+Polar band → Mac Chrome (Web Bluetooth) ┼─ WS /ws/ingest ─► FastAPI ─► Tiger Data (TimescaleDB)
+iPhone /bed/120 (DeviceMotion) ─────────┘                     │        hypertables · caggs · rules
+                                                               │  fast tier, every 2 s ─► ranked queue ─► WS /ws/live ─► Next.js
+                                                               └─ every 1 min: closed 15-min buckets ─► Snowflake
+                                                                  ANOMALY_DETECTION · FORECAST · Cortex (Claude) · Search · Analyst
+                                                                  └─► results cached back in Tiger, revealed when "known"
+```
+
+- **Fast tier: Tiger Data, seconds.** What is happening now. Hard rules catch emergencies: falls (impact then stillness), extreme vitals, possibly unresponsive (stillness far beyond the resident's own pattern plus a heart-rate drop), and a night-time bed exit by a resident on fall precautions. A partial NEWS2 score, personal-baseline z-scores and alarm-fatigue controls (hysteresis, persistence, 30-min suppression after a check) run over all 120 residents every 2 s.
+- **Deep tier: Snowflake, minutes.** What it means and what comes next.
+  - Five multi-series `SNOWFLAKE.ML.ANOMALY_DETECTION` models judge every closed 15-minute bucket against **each resident's own learned normal**.
+  - `SNOWFLAKE.ML.FORECAST` warns before a NEWS2 threshold is crossed.
+  - Claude in **Snowflake Cortex** writes a bedside assessment grounded in the numbers and in care-plan passages retrieved by **Cortex Search**.
+- **Graceful failure.** If Snowflake is slow or unreachable, the fast tier and the UI keep working:
+  - scoring falls back to Tiger z-scores;
+  - AI cards fall back to a deterministic template that still cites the care plan;
+  - notes fall back to keyword reading;
+  - Ask shows the last real answer, labelled;
+  - Under the hood serves its cached inventory.
+- **Never in the wrong layer:** no pgai, pgvector or vectorizers in Tiger, and no LLM outside Snowflake.
+
+## How Tiger Data is used
+
+| Tiger feature | What it does in Vigil | File |
+|---|---|---|
+| Hypertables (`vitals` wide table, `events`, `priority_snapshots`), 1-day chunks | ~2 M rows/day from 120 residents × 10 metrics every 5 s, plus live device rows | `backend/sql/tiger/001_schema.sql` |
+| Binary `COPY` over 4 connections | Seeds 10–14 days (23.5 M rows) at ~90k rows/s | `backend/scripts/seed.py`, `backend/app/db/tiger.py` |
+| Hierarchical continuous aggregates `vitals_1m → vitals_15m → vitals_1h`, real-time aggregation on | Charts (6 h / 24 h / 7 d), the evaluator's minute view, and the 15-min buckets that feed Snowflake | `backend/sql/tiger/002_caggs.sql` |
+| Columnstore compression (`segmentby resident_id`), retention, refresh policies | 14.7× smaller history; raw kept 90 days, aggregates 2 years | `backend/sql/tiger/003_policies.sql` |
+| `add_job` hourly job with `percentile_agg` / `approx_percentile` / `rollup`, `stats_agg`, `state_agg` + `state_periods` | Each resident's baseline per 4-hour block (p05/p50/p95), nightly bed exits and longest still period | `backend/sql/tiger/004_jobs.sql` |
+| `heartbeat_agg` | Device liveness: band off or silent > 5–10 min is a device task, never an alarm | `backend/app/db/tiger.py`, `backend/app/scoring/rules.py` |
+| `time_bucket_gapfill` + `locf` | Gap-free resident charts at 1 m / 15 m / 1 h | `backend/app/db/tiger.py` (`/api/residents/{id}/vitals`) |
+| Fast-tier evaluator: one pipelined batch of 5 queries for all 120 residents every 2 s (~0.3–0.4 s) | Rules, NEWS2, baselines, priority, alert gate | `backend/app/scoring/evaluator.py`, `backend/app/db/tiger.py` |
+| Advisory locks and leases | One live writer per database, sync / seed / train never overlap, a second backend stands by | `backend/app/db/tiger.py`, `backend/app/sim/live_loop.py` |
+| Live device ingest (1-s batched writes; the bed event and its rows in one statement) | Polar band + iPhone → Tiger → #1 in ~4 s | `backend/app/devices/ingest.py` |
+| Catalog: `approximate_row_count`, `hypertable_columnstore_stats`, `timescaledb_information.chunks` / `jobs` / `job_stats` | The Under the hood proof panel and the raw-vs-cagg benchmark | `backend/app/api/stats.py`, `backend/app/api/bench.py` |
+| Fixed-threshold alarm count over a night of raw readings | Alarm-fatigue comparison | `backend/app/db/tiger.py`, `backend/app/sim/outcome.py` |
+
+## How Snowflake is used
+
+| Snowflake feature | What it does in Vigil | File |
+|---|---|---|
+| Sync via `write_pandas` (every minute) | Closed `vitals_15m` buckets + events → `VIGIL.CORE` | `backend/app/deep/sync.py` |
+| `SNOWFLAKE.ML.ANOMALY_DETECTION`: 5 multi-series models (HR, RR, SpO₂, skin temp, night movement) × 120 series, exogenous `IN_BED_FRAC`, 99 % interval | Judges every resident against their own normal; severity → `P_anom`; the expected band and ◆ dots on charts. Last night is held out of training, so the replay is out-of-sample. | `backend/sql/snowflake/004_models.sql`, `backend/scripts/train_models.py`, `backend/app/deep/anomaly.py` |
+| `SNOWFLAKE.ML.FORECAST` (single-series, on HIGH/CRITICAL) | "RR forecast to cross 25 by ~04:15" → `P_trend` and the dashed forecast line | `backend/app/deep/forecast.py` |
+| Cortex `COMPLETE` (Claude) with a JSON schema | Bedside assessment: concerns, checks, escalation by code status. Validation drops any citation not in the retrieved care plan and softens diagnostic wording. | `backend/app/deep/assess.py`, `backend/app/deep/wording.py` |
+| `AI_PARSE_DOCUMENT` (LAYOUT) + `SPLIT_TEXT_RECURSIVE_CHARACTER` + **Cortex Search** service | 120 care-plan PDFs → 1,200 chunks, searched per resident for every assessment | `backend/sql/snowflake/003_docs.sql`, `backend/scripts/index_care_plans.py` |
+| `AI_TRANSCRIBE` + `AI_EXTRACT` | Voice and text nurse notes → confusion, intake, concern → NEWS2 consciousness and `P_concern` | `backend/app/deep/notes.py` |
+| `AI_AGG` | SBAR shift handoff | `backend/app/deep/handoff.py` |
+| **Cortex Analyst** + semantic model (5 verified queries) | "Ask the facility": natural language → SQL → table + chart | `backend/sql/snowflake/005_semantic.yaml`, `backend/app/deep/analyst.py` |
+
+**Snowflake API surfaces.** All use key-pair JWT auth, and every call is counted with its latency on Under the hood:
+
+| API surface | Endpoint | Used for | Client |
+|---|---|---|---|
+| Cortex Search REST | `POST /api/v2/databases/VIGIL/schemas/DOCS/cortex-search-services/CARE_PLAN_SEARCH:query` | Care-plan passages for every AI card | `backend/app/db/snowflake_rest.py` |
+| Cortex Analyst REST | `POST /api/v2/cortex/analyst/message` | Ask the facility | `backend/app/db/snowflake_rest.py` |
+| SQL REST API | `POST /api/v2/statements` (+ status polling, `…/cancel`) | `COMPLETE`, `AI_EXTRACT`, `AI_TRANSCRIBE`, `AI_AGG`, running Analyst's SQL, storing cards and handoffs, the inventory, cancelling queries on shutdown | `backend/app/db/snowflake_rest.py` |
+| Cortex Inference REST | `POST /api/v2/cortex/inference:complete` | Tried first for AI cards. This trial account gets a 403 (`003001`), so the same messages go through the SQL API, and the endpoint is retried every 30 min. | `backend/app/db/snowflake_rest.py` |
+| Python connector | key-pair JWT | `write_pandas` sync, ML training and inference, `PUT` to stages (care plans, note audio, the semantic model) | `backend/app/db/snowflake_sql.py` |
+
+## Real numbers
+
+Every number below was read from `/under-the-hood` (live queries, not constants) on the 10-day seed on 2026-10-18.
+
+| | |
+|---|---|
+| Tiger rows | **23.5 M** vitals rows (ingest ~24 rows/s live), 36k events, 650k priority snapshots |
+| Compression | **14.7×**: 2.61 GB → 178 MB (10 of 13 chunks in the columnstore) |
+| Benchmark | 7-day hourly HR for all 120 residents: **5,158 ms** from raw rows vs **214 ms** from `vitals_1h`, a **24× speedup** (34.7× in an earlier run; it varies with load) |
+| Snowflake models | **5 anomaly models × 120 series**, 87,664 results; 1,200 care-plan chunks in Cortex Search |
+| Alarm fatigue (replay night) | **903 fixed-threshold alarms** for 110 residents (HR > 100 / < 50, RR > 24 / < 10, SpO₂ < 90, any bed exit) vs **22 Vigil alerts** for 4 residents. Margaret Kim (COPD): 18 fixed alarms, 0 Vigil alerts. |
+| Alvarez lead time | Vigil flagged her HIGH at **00:42**: **1 h 18 min** before her 02:00 round (reached at 02:17) and **3 h 20 min** before the first fixed vital-sign alarm (RR > 24 at 04:02). She is **#1 at 02:14**, before anyone knew she was confused. |
+| Latency | Bed exit → R-120 **#1 CRITICAL in ~4 s**; Cortex card ~13–16 s; fast-tier cycle ~0.4 s for 120 residents |
+
+## Screenshots
+
+<!-- Add PNGs (1440×900 or so) under docs/screenshots/ with these names; the README links them. -->
+| | |
+|---|---|
+| ![Rounds queue](docs/screenshots/rounds-queue.png) | ![Resident page: Alvarez at 02:14](docs/screenshots/resident-alvarez.png) |
+| Rounds queue at 02:14 | Resident page with Snowflake band, anomaly dots, forecast and Cortex card |
+| ![Under the hood](docs/screenshots/under-the-hood.png) | ![iPhone bed sensor](docs/screenshots/bed-sensor.png) |
+| Under the hood: Tiger + Snowflake proof | iPhone bed sensor |
+
+**Demo:** [DEMO_SCRIPT.md](DEMO_SCRIPT.md) has the 3-minute pitch, the backup plan for each step and likely judge questions. **Deploy:** [DEPLOY.md](DEPLOY.md). **Spec:** `SPEC.md` is the source of truth; `AGENTS.md` has the rules for coding agents; `BUILD_PROMPTS.md` lists the build phases.
+
+**Built with:** Tiger Data (TimescaleDB + toolkit), Snowflake (ML functions, Cortex AI, Cortex Search, Cortex Analyst, REST APIs), FastAPI, psycopg 3, Next.js, Tailwind, shadcn/ui, ECharts, Zustand, Caddy, Docker Compose, Vultr, Polar Verity Sense, an iPhone.
 
 ## Prerequisites
 
@@ -60,7 +162,9 @@ make logs
 make down
 ```
 
-Compose reads `.env` and mounts `./secrets` read-only into the backend. The `Caddyfile` is the same in both modes. Only the upstreams differ: `BACKEND_UPSTREAM=backend:8000` and `FRONTEND_UPSTREAM=frontend:3000` are set in `docker-compose.yml`. On Vultr, set `SITE_ADDRESS` to your domain **and publish ports 80/443 on the `caddy` service** (Compose only publishes 8080 today); Caddy then handles HTTPS automatically (Phase 10).
+Compose reads `.env` and mounts `./secrets` read-only into the backend. The `Caddyfile` is the same in both modes. Only the upstreams differ: `BACKEND_UPSTREAM=backend:8000` and `FRONTEND_UPSTREAM=frontend:3000` are set in `docker-compose.yml`.
+
+On a public server, `docker-compose.prod.yml` is layered on top. It publishes 80/443 and uses `DOMAIN` from `.env` as Caddy's site address (automatic HTTPS) and as `PUBLIC_URL`. `scripts/deploy.sh` does all of this from your Mac; see **[DEPLOY.md](DEPLOY.md)**.
 
 ### Live hardware: Polar band + iPhone bed sensor (Phase 7)
 
@@ -73,7 +177,7 @@ The presenter is R-120 Thomas Grant. A Polar Verity Sense streams HR from the Ma
    - Open R-120 from the Rounds queue. The heart-rate chart shows "Polar live · NN bpm" and the line extends every second.
    - The connection lives outside the page, so it keeps streaming while you navigate. After a full reload, click Connect again.
    - If the band drops (out of range, asleep), it reconnects by itself. The status shows "reconnecting".
-4. **Tunnel.** In a second terminal, run `make tunnel` and copy the `https://<words>.trycloudflare.com` URL. Put it in `.env` as `PUBLIC_URL=https://<words>.trycloudflare.com` (no backend restart needed). The `/devices` page shows the QR code within 3 s.
+4. **Tunnel** (local only; on the Vultr server `PUBLIC_URL` is already `https://$DOMAIN`, see DEPLOY.md). In a second terminal, run `make tunnel` and copy the `https://<words>.trycloudflare.com` URL. Put it in `.env` as `PUBLIC_URL=https://<words>.trycloudflare.com` (no backend restart needed). The `/devices` page shows the QR code within 3 s.
 5. **iPhone.** Turn Low Power Mode off, and turn the volume up for the spoken prompts. Scan the QR code with the Camera app and open the link in Safari. Tap **Start sensor**, then **Allow** motion access. The page shows "● streaming" and a live motion meter.
    - If you tapped Don't Allow, close the tab and open the link again. If the "Screen awake" line says no, set Settings → Display & Brightness → Auto-Lock → Never.
 6. **Calibrate (~35 s, spoken).** Tap **Calibrate** next to the bed and follow the voice:
@@ -114,12 +218,107 @@ The presenter is R-120 Thomas Grant. A Polar Verity Sense streams HR from the Ma
 | `make test` | backend pytest + frontend vitest |
 | `make lint` | ruff + eslint + `tsc --noEmit` |
 | `make tunnel` | cloudflared HTTPS tunnel to :8080 (copy its URL into `.env` as `PUBLIC_URL`) |
+| `make reset` | **Demo to a known-good state** + READY checklist (`ARGS="--simulated-band"`, `ARGS="--retrain"`); see Status → Phase 10 |
+| `make deploy-setup` / `deploy-secrets` / `deploy` | Vultr: prepare the server, copy `.env` + key over SSH, ship + rebuild + wait for HTTPS ([DEPLOY.md](DEPLOY.md)) |
+| `make deploy-status` / `deploy-logs` / `deploy-reset` | Vultr: health, logs, READY checklist on the server |
 
 ## Layout
 
 The layout follows SPEC §5. `backend/app/` holds `api/`, `ws/`, `db/` (`tiger.py`, `snowflake_sql.py`, `snowflake_rest.py`), `sim/`, `scoring/`, `deep/` and `devices/`. SQL lives in `backend/sql/{tiger,snowflake}` and scripts in `backend/scripts/`. `frontend/` is a Next.js App Router app. Modules for later phases are placeholders whose docstrings name the phase that fills them in.
 
 ## Status
+
+**Phase 10 (deploy, harden, demo assets): done in code, verified locally; the Vultr deploy waits for your server**
+
+What works:
+- **Deploy** (`docker-compose.prod.yml`, `scripts/deploy.sh`, `make deploy*`, [DEPLOY.md](DEPLOY.md)):
+  - `DOMAIN` in `.env` is the one setting. It becomes Caddy's site address (Let's Encrypt HTTPS; `<ip>.sslip.io` for the practice run, a real domain at Cal Hacks) and `PUBLIC_URL=https://$DOMAIN`, so the iPhone QR code needs no tunnel. Ports 80/443 (+ UDP 443 for HTTP/3) replace 8080.
+  - `deploy.sh` subcommands:
+    - `setup`: Docker, 4 GB swap, ufw 22/80/443.
+    - `secrets`: `scp` of `.env` + the key, `chmod 600`.
+    - `push`: rsync of the working tree, excluding `.git`, `.env*`, `secrets/`, `*.p8`, `*.pem`, `node_modules` and caches. Then `compose up --build` and a wait for `https://$DOMAIN/api/health`.
+    - also `status`, `logs`, `reset`, `ssh`, `stop`.
+  - Compose additions: log rotation (10 MB × 3), a backend healthcheck, and a 30 s stop grace period. uvicorn runs with `--timeout-graceful-shutdown 5`, so open WebSockets can't hold up shutdown. Caddy compresses responses (`encode zstd gzip`): the queue goes from 177 KB to 18.5 KB.
+- **`scripts/reset_demo.py`**, run with no command (`make reset`, or `scripts/deploy.sh reset` on the server). It prints a READY checklist with PASS / WARN / FAIL per item and exits 1 on any FAIL.
+  1. **Clean** what the live session left since the seed ended, in Tiger and Snowflake CORE (plus note audio, and handoffs for later shifts):
+     - **R-120:** all events (phone and admin bed-exit tests, alerts), snapshots, cards, forecasts and extractions.
+     - **Residents with typed or spoken notes:** the notes and everything they caused (what `remove-notes` did).
+     - **Mark-checked clicks:** the check events.
+     - **Kept:** simulated history and device vitals, which are the Polar band's future baseline.
+  2. **Controls**, through the running backend: replay stopped and `POST /api/sim/reset`, then the new `POST /api/sim/reload`. It resets the alert gate for cleaned residents and reloads the queue headlines, the handoff cache and the evaluator context, so no restart is needed. `--simulated-band` turns R-120's simulation on.
+  3. **Models**: valid when trained for this seed and all 5 exist in `VIGIL.ML`. If only the metadata is missing, it re-registers them (`train_models.py --no-train`). It retrains only with `--retrain`.
+  4. **Replay**: valid when prepared for this seed and finished, made with the current models, with every card made and every step in `replay_snapshots`. Otherwise it runs Prepare, which redoes only what's missing. It also checks the story: Alvarez #1 at 02:14.
+  5. **Live checks**:
+     - Cortex Search: R-120's "bed alarm" chunk.
+     - Cortex Analyst: all 5 suggested questions, one at a time; each answer is saved as /ask's offline fallback.
+     - A real Cortex card for Alvarez at 02:14, built by the new `Assessor.generate`: context + Search + COMPLETE + validation, not stored.
+     - The recorded night's handoff.
+  6. **Warm**: the slow API reads, then every page twice through the public origin.
+  - Measured against the real accounts: **11/11 PASS in 28 s**:
+
+    ```
+    PASS  Tiger             TimescaleDB 2.30.2 · 23.5 M vitals rows · 10-day seed (seed 1337) · newest row 5 s ago
+    PASS  Sim controls      0 injections cleared · night mode off · simulated band off · 1 gates reset
+    PASS  Backend           http://127.0.0.1:8000 · mode live · live loop streaming · evaluator running · warm-up 2.0 s
+    PASS  Snowflake         key-pair login (connector + REST JWT) · VIGIL_WH · 1.4 s
+    PASS  Anomaly models    5 models × 120 series · trained 10-17 11:37 on 9.1 days (last night held out)
+    PASS  Replay prepared   night of 2026-10-16 · 286 steps · 22 alerts · 27 AI cards · Alvarez #1 HIGH 63 at 02:14
+    PASS  Care-plan search  Cortex Search REST · R-120 → "- Fall precautions: bed alarm; assist ×1 to bathroom; …" (384 ms)
+    PASS  Cortex Analyst    5/5 suggested questions answered in 15.9 s · "Which residents had more than 3 bed ex…" → 16 rows
+    PASS  Cortex card       claude-sonnet-5 via sql_api · R-17 at 02:14 · "Rising HR/RR and low SpO2 overnight, check Rosa now" · 3 citations (14 s)
+    PASS  Shift handoff     night of 2026-10-16 · SNOWFLAKE.CORTEX.AI_AGG · flags Alvarez, Patel, Ortiz, Lee, Wright
+    PASS  Pages             9/9 pages via http://localhost:8080 · slowest /resident/17 25 ms
+    ```
+
+    The first run cleaned R-120's Phase 7 device tests: 32 events, 5,152 snapshots and 6 cards. The earlier R-23 / R-50 test voice notes had already been removed in Phase 9; the same notes are now caught automatically.
+- **Snowflake queries are cancelled on shutdown** (the Phase 9 known issue):
+  - Every connector connection is registered, and the lifespan's shutdown runs `SYSTEM$CANCEL_ALL_QUERIES(<session>)` for each one through the SQL API. That runs in cloud services, so it isn't queued behind what it cancels. It also cancels SQL API statements still being polled.
+  - A statement the client gave up on (timeout) is now cancelled too.
+  - Backend sessions set `ABORT_DETACHED_QUERY`, so a crash or `kill -9` doesn't leave a query running.
+  - Measured: `CALL SYSTEM$WAIT(60)` was cancelled 0.5 s after the call. In Snowflake's query history, the `DETECT_ANOMALIES` runs in flight at each dev hot-reload during this phase ended `FAILED_WITH_ERROR` (cancelled) instead of stacking.
+- **Live detection no longer starves the interactive calls**:
+  - Query history showed the 5 parallel `DETECT_ANOMALIES` calls (10 queries for ~4.5 min of every 15) saturating XSMALL `VIGIL_WH`. Analyst's SQL queued 46 s and timed out twice, and the inventory queued 30 s.
+  - Live detection on the shared warehouse now runs at most 2 models at a time (`ANOMALY_DETECT_CONCURRENCY`, default 2). Optionally it gets its own warehouse (`SNOWFLAKE_DETECT_WAREHOUSE`; all 5 in parallel there). Prepare and `make train` are unchanged.
+  - After the change: Analyst answered 5/5 in 15.9 s while detection was running. A detection cycle takes ~7.5 min (each model ~140 s alone vs ~280 s when all five share the warehouse), so results land ~12 min after a bucket closes.
+- **Standby for a second backend**: when another backend holds the live-writer lease (e.g. the server while `make dev` runs), this one still serves its pages, but its evaluator writes no snapshots or alerts. Automatic sync, detection, Cortex cards and forecasts are left to the primary. Verified with the production containers next to `make dev`: live loop and sync `standby`.
+- **Startup warm-up** (`app/warmup.py`, `/api/health` → `warmup`): in the background it fills the outcome cache, the Snowflake inventory, the recorded night's handoff and the Analyst semantic-model upload (2.0–2.3 s). The Snowflake inventory is now served stale-while-revalidate, so the panel never waits on Snowflake.
+- **Offline-safe fallbacks for every Snowflake feature**:
+  - scoring: Tiger z-scores;
+  - AI cards: the deterministic template, with care-plan lines from the roster;
+  - notes: keyword reading;
+  - forecasts: none, so P_trend is 0;
+  - handoff: the deterministic handoff;
+  - **Ask: the last real answer to the same question, labelled with its time** (new: stored in Tiger `sim_meta`);
+  - Under the hood: the cached inventory with the error shown;
+  - replay never calls Snowflake.
+- **Nav menu** (`components/nav-menu.tsx`, `lib/nav.ts`): role-aware. The header shows the role's pages (CNA/LPN: Rounds, Devices; Charge RN: Rounds, Handoff, Ask; DON: Rounds, Ask, Handoff, Under the hood), and the rest go under **More**. On phones it is one **Menu** button with "For <role>" and "More" groups. The phone header is two rows: logo, menu and clock, then status.
+- **Hidden demo shortcuts** (`components/demo-shortcuts.tsx`, `lib/shortcuts.ts`):
+  - **?** opens the panel.
+  - **Space/P** play/pause (starts the replay from live). **1–9** jump to a bookmark (from live: opens the replay there, paused). **S** speed. **L** back to live.
+  - **N** force night. **B / Shift+B** R-120 bed exit / back in bed. **G then Q/R/H/A/D/U/M** go to a page.
+  - Keys are ignored while typing and on the iPhone bed page. A small status pill confirms each action.
+  - Verified in the browser: **3** → 02:14, Alvarez #1 HIGH 63. **7** + Space → Ortiz fall, then Patel. **L**, **N**, **B** → R-120 **#1 CRITICAL 90** "Out of bed since 18:44 without staff (1-assist, Morse 70)" ~6 s after the key press.
+- **Production build check** (Docker Desktop, images built locally: backend 1.45 GB, frontend 313 MB): the prod-image stack on :8090 next to the dev stack was healthy. All 8 pages returned in 7–105 ms (DOMContentLoaded ~30 ms), with **no console errors** on any page.
+- **Docs**: the README now opens with the Devpost write-up (problem, two tiers, Tiger and Snowflake feature → file tables, every Snowflake API surface, the real numbers, screenshot placeholders). [DEMO_SCRIPT.md](DEMO_SCRIPT.md) has the 3-minute pitch timed to the bookmarks and the live R-120 moment, a backup plan per step, and judge Q&A.
+- **Quieter logs**: the connector's multi-line IMDS warning on every login (no cloud metadata in Docker or on Vultr) is silenced.
+- **Tests**: backend **430** passed:
+  - shutdown cancel (sessions, handles, nothing-to-cancel) and cancelling a statement given up on;
+  - Ask's offline fallback (served only for the same question without history) and what is remembered;
+  - standby;
+  - the detection concurrency cap (peak 2 vs 5);
+  - the READY report's exit code and the backend check.
+
+  Frontend **66** passed: nav per role, shortcut key mapping, typing/modifier guard, speed cycle. `make lint` is clean.
+
+Known issues and what you must do:
+- **The Vultr server isn't created yet** (it needs your account). DEPLOY.md steps 1–4 are by hand: account, SSH key, Deploy, and `DEPLOY_HOST` + `DOMAIN` in `.env`. Then run `scripts/deploy.sh setup`, `secrets`, `push`, `reset`.
+  - The public-URL acceptance checks (full demo over HTTPS, the iPhone bed page over that URL) are untested until then.
+  - `deploy.sh` setup/secrets/push have not run against a real server. The rsync file list and the merged prod Compose config were checked locally.
+- **Sim controls live in the backend's memory** (force night, simulated band). Every redeploy or restart resets them, so run `scripts/deploy.sh reset --simulated-band` after a push until the Polar band works (it arrives Monday).
+- `reset_demo.py` does not undo injected scenarios' vitals. Admin injections end at reset, and their rows age out of the 6 h scoring window.
+- Live detection under the concurrency cap takes ~7.5 min per bucket. To get results sooner for the demo, set `SNOWFLAKE_DETECT_WAREHOUSE=VIGIL_ML_WH`. Note it is MEDIUM (4 credits/h while running, ~25 % duty), so switch it back afterwards, or create an XSMALL `VIGIL_DETECT_WH` as ACCOUNTADMIN.
+- Screenshots are placeholders (`docs/screenshots/*.png`).
+- The app has no login (SPEC). Anyone with the public URL can use Admin, so destroy the server after the event.
 
 **Phase 9 (forecast, nurse notes, shift handoff, Ask the facility): done**
 

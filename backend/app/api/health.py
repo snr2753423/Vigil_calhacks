@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app import __version__
+from app import __version__, warmup
 from app.config import get_settings
 from app.deep import anomaly, sync
 from app.scoring import evaluator
@@ -23,6 +23,7 @@ async def health() -> dict:
         "sim": sim_state.to_dict(),
         "live_sim": live_loop.live.stats.to_dict() if live_loop.live else None,
         "evaluator": evaluator.evaluator.stats.to_dict() if evaluator.evaluator else None,
+        "warmup": warmup.status,
         "deep": {"sync": sync.stats.phase, "detection": anomaly.stats.phase, "last_sync": sync.stats.last_sync},
         "configured": {
             "tiger": settings.tiger_configured,

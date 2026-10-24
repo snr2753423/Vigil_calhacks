@@ -148,3 +148,61 @@ def test_search_care_plan_filters_by_resident(tmp_path, key) -> None:
         return await rest.search_care_plan(17, "q")
 
     assert asyncio.run(go()) == [{"section": "Escalation preferences", "chunk": "c", "resident_id": 17}]
+
+
+def test_cancel_running_cancels_sessions_and_long_statements(tmp_path, key) -> None:
+    """Shutdown (Phase 10): SYSTEM$CANCEL_ALL_QUERIES per connector session, and a statement still polled past the
+    SQL API's synchronous window is cancelled by its handle."""
+    seen: list[tuple[str, dict]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content) if req.content else {}
+        seen.append((req.url.path, body))
+        return httpx.Response(200, json={"data": [["ok"]]})
+
+    async def go():
+        rest = _client(tmp_path, key, handler)
+        rest._client_loop = asyncio.get_running_loop()
+        rest._running.add("01-handle")
+        return await rest.cancel_running([111, 222], timeout=5)
+
+    out = asyncio.run(go())
+    assert out == {"sessions": 2, "statements": 1, "failed": 0}
+    statements = [b for p, b in seen if p == "/api/v2/statements"]
+    assert [s["bindings"]["1"]["value"] for s in statements] == ["111", "222"]
+    assert all("SYSTEM$CANCEL_ALL_QUERIES" in s["statement"] for s in statements)
+    assert ("/api/v2/statements/01-handle/cancel", {}) in seen
+
+
+def test_cancel_running_with_nothing_running_makes_no_call(tmp_path, key) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:  # pragma: no cover — must not be reached
+        raise AssertionError("no request expected")
+
+    async def go():
+        rest = _client(tmp_path, key, handler)
+        rest._client_loop = asyncio.get_running_loop()
+        return await rest.cancel_running([])
+
+    assert asyncio.run(go()) == {"sessions": 0, "statements": 0}
+
+
+def test_a_statement_given_up_on_is_cancelled(tmp_path, key) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/cancel"):
+            seen.append("cancel")
+            return httpx.Response(200, json={})
+        return httpx.Response(202, json={"statementHandle": "h1", "statementStatusUrl": "/api/v2/statements/h1"})
+
+    seen: list[str] = []
+
+    async def go():
+        rest = _client(tmp_path, key, handler)
+        rest._client_loop = asyncio.get_running_loop()
+        try:
+            await rest.sql("SELECT 1", timeout=1)
+        finally:
+            assert not rest._running  # no longer tracked once given up on
+
+    with pytest.raises(sr.SnowflakeRestError):
+        asyncio.run(go())
+    assert seen == ["cancel"]

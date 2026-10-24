@@ -98,6 +98,9 @@ FEATURE_TEXT = {
     "rest.sql_api.cortex_complete": "SNOWFLAKE.CORTEX.COMPLETE (Claude): AI assessment cards",
     "rest.sql_api.store_assessment": "INSERT into CORE.AI_ASSESSMENTS",
     "rest.sql_api.inventory": "this panel's inventory (SHOW models / services, counts)",
+    "rest.sql_api.cancel_session": "SYSTEM$CANCEL_ALL_QUERIES on shutdown (no orphaned queries after a restart)",
+    "rest.sql_api.cancel": "cancel a statement this process stopped waiting for (or on shutdown)",
+    "rest.sql_api.reset_check": "reset_demo.py READY checks",
     "rest.cortex_search": "care-plan chunks for each AI card (filtered by resident)",
     "rest.inference_complete": "tried first for each card; refused for this account (403), falls back to the SQL API",
     "rest.cortex_analyst": "Ask the facility: question → interpretation + SQL (005_semantic.yaml)",
@@ -116,6 +119,7 @@ FEATURE_TEXT = {
     "forecast.store": "write CORE.FORECAST_RESULTS",
     "notes.put_audio": "PUT voice notes to @CORE.NOTE_AUDIO",
     "analyst.put_semantic_model": "PUT the semantic model to @CORE.SEMANTIC",
+    "anomaly.detect.warehouse": "USE WAREHOUSE for live detection (SNOWFLAKE_DETECT_WAREHOUSE)",
     "anomaly.detect": "CALL ML.AD_*!DETECT_ANOMALIES (SNOWFLAKE.ML.ANOMALY_DETECTION)",
     "anomaly.train": "CREATE SNOWFLAKE.ML.ANOMALY_DETECTION (training)",
     "anomaly.store": "write CORE.ANOMALY_RESULTS",
@@ -125,11 +129,12 @@ FEATURE_TEXT = {
     "connect": "key-pair login",
     "check": "make check probes (AI_COMPLETE, SHOW CORTEX BASE MODELS, …)",
     "migrate": "schema migrations",
-    "reset": "reset_demo truncation",
+    "reset": "reset_demo.py: truncation and test-data cleanup",
+    "reset_check": "reset_demo.py READY checks",
 }
 INVENTORY_TTL_S = 300
 INVENTORY_RETRY_S = 60  # after a failure (e.g. the warehouse busy with detection), don't ask again sooner
-_inventory: dict = {"at": 0.0, "data": None, "failed_at": 0.0, "error": None}
+_inventory: dict = {"at": 0.0, "data": None, "failed_at": 0.0, "error": None, "refreshing": None}
 
 
 def feature_text(name: str) -> str:
@@ -166,6 +171,12 @@ async def snowflake_inventory(force: bool = False) -> dict:
     """What lives in Snowflake right now, read through the SQL REST API (cached INVENTORY_TTL_S)."""
     now = time.monotonic()
     if not force and _inventory["data"] is not None and now - _inventory["at"] < INVENTORY_TTL_S:
+        return _inventory["data"] | {"cached": True}
+    if not force and _inventory["data"] is not None:
+        # Stale: answer at once with the last good inventory and refresh it in the background, so the panel never
+        # waits seconds on Snowflake (or behind a detection run on the warehouse) during a demo.
+        if _inventory.get("refreshing") is None or _inventory["refreshing"].done():
+            _inventory["refreshing"] = asyncio.create_task(snowflake_inventory(force=True), name="inventory-refresh")
         return _inventory["data"] | {"cached": True}
     if not force and _inventory["error"] and now - _inventory["failed_at"] < INVENTORY_RETRY_S:
         stale = _inventory["data"] or {}

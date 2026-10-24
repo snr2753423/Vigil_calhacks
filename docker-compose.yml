@@ -1,7 +1,14 @@
-# Production-style stack: Caddy (:8080) → backend:8000 (/api, /ws) and frontend:3000 (everything else).
-#   make up     # build + start
+# Production-style stack: Caddy → backend:8000 (/api, /ws) and frontend:3000 (everything else).
+#   make up       # local: build + start on http://localhost:8080
 #   make down
+# On the Vultr server, docker-compose.prod.yml is layered on top (real domain, HTTPS on 80/443): see DEPLOY.md.
 # For hot-reload development use `make dev` (local processes) instead.
+
+x-logging: &logging  # keep container logs from filling a small VM's disk
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   backend:
@@ -15,12 +22,22 @@ services:
       - ./secrets:/srv/vigil/secrets:ro
     expose:
       - "8000"
+    # Shutdown cancels running Snowflake queries and stops the background loops (≤ ~15 s): don't SIGKILL it first.
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging: *logging
     restart: unless-stopped
 
   frontend:
     build: ./frontend
     expose:
       - "3000"
+    logging: *logging
     restart: unless-stopped
 
   caddy:
@@ -30,9 +47,6 @@ services:
       - frontend
     ports:
       - "8080:8080"
-      # With SITE_ADDRESS set to a real domain (Vultr), Caddy serves HTTPS on 80/443: publish them too.
-      # - "80:80"
-      # - "443:443"
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:-:8080}
       BACKEND_UPSTREAM: backend:8000
@@ -41,6 +55,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    logging: *logging
     restart: unless-stopped
 
 volumes:

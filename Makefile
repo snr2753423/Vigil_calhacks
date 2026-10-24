@@ -6,7 +6,8 @@ BACKEND  := backend
 FRONTEND := frontend
 DAYS ?=
 
-.PHONY: help install dev up down logs check keygen migrate migrate-sf seed sf-load train detect care-plans prepare test lint tunnel
+.PHONY: help install dev up down logs check keygen migrate migrate-sf seed sf-load train detect care-plans prepare reset test lint tunnel \
+	deploy-setup deploy-secrets deploy deploy-status deploy-logs deploy-reset
 
 help: ## Show this help
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-9s %s\n", $$1, $$2}'
@@ -66,6 +67,9 @@ detect: ## Run Snowflake anomaly detection over last night (or --from/--to) and 
 prepare: ## Prepare last night's replay: detection, gated scoring pass, Cortex cards (also /admin → Prepare replay)
 	cd $(BACKEND) && uv run python -u scripts/prepare_replay.py
 
+reset: ## Demo to a known-good state + READY checklist (ARGS="--retrain" to retrain models, ~67 min)
+	cd $(BACKEND) && uv run python -u scripts/reset_demo.py $(ARGS)
+
 care-plans: ## Generate care-plan PDFs, upload + parse + chunk in Snowflake, build Cortex Search (003_docs.sql)
 	cd $(BACKEND) && uv run python -u scripts/index_care_plans.py
 
@@ -82,3 +86,22 @@ tunnel: ## Public HTTPS URL for the iPhone pages (cloudflared → localhost:8080
 	@echo "Copy the https://….trycloudflare.com URL below into .env as PUBLIC_URL=… (no restart needed),"
 	@echo "then scan the QR code on http://localhost:8080/devices with the iPhone."
 	cloudflared tunnel --url http://localhost:8080
+
+# --- Vultr deploy (DEPLOY.md). DEPLOY_HOST and DOMAIN come from .env.
+deploy-setup: ## Server, once: Docker, swap, firewall
+	scripts/deploy.sh setup
+
+deploy-secrets: ## Copy .env + secrets/ to the server over SSH
+	scripts/deploy.sh secrets
+
+deploy: ## Copy code to the server, rebuild, restart, wait for https://DOMAIN
+	scripts/deploy.sh push
+
+deploy-status: ## Server containers + health
+	scripts/deploy.sh status
+
+deploy-logs: ## Follow server logs (Ctrl-C to stop)
+	scripts/deploy.sh logs
+
+deploy-reset: ## Run reset_demo.py on the server (READY checklist)
+	scripts/deploy.sh reset $(ARGS)

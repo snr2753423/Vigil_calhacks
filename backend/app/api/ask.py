@@ -29,12 +29,18 @@ async def suggestions() -> dict:
 
 @router.post("")
 async def ask(body: AskIn) -> dict:
+    question = body.question.strip()
     try:
-        return await analyst.ask(body.question.strip(), [t.model_dump() for t in body.history])
+        result = await analyst.ask(question, [t.model_dump() for t in body.history])
     except SnowflakeNotConfigured as exc:
         raise HTTPException(503, str(exc)) from exc
     except Exception as exc:
         log.warning("ask: %s", exc)
-        raise HTTPException(
-            502, f"Cortex Analyst is unavailable right now ({' '.join(str(exc).split())[:160]})."
-        ) from exc
+        reason = " ".join(str(exc).split())[:160] or type(exc).__name__
+        # Offline-safe: the last real answer to this question (from Snowflake, stored in Tiger), clearly labelled.
+        if not body.history and (saved := await analyst.recall(question)) is not None:
+            return saved | {"fallback": {"answered_at": saved.get("answered_at"), "reason": reason}}
+        raise HTTPException(502, f"Cortex Analyst is unavailable right now ({reason}).") from exc
+    if not body.history:
+        await analyst.remember(result)
+    return result

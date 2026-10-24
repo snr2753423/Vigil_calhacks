@@ -658,4 +658,6 @@ export type AskResult = {
   truncated: boolean;
   chart: AskChart;
   error: string | null;
+  /** Set when Cortex Analyst was unreachable and this is the last real answer to the same question. */
+  fallback?: { answered_at: string | null; reason: string };
 };

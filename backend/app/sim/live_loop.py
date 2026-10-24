@@ -239,6 +239,13 @@ class LiveLoop:
 live: LiveLoop | None = None
 
 
+def standby() -> bool:
+    """Another backend on this Tiger service holds the live-writer lease (e.g. the Vultr server while `make dev` runs
+    on a laptop). Then this one only serves its own pages: the evaluator scores but writes no snapshots or alerts,
+    and the automatic Snowflake work (sync, anomaly detection, Cortex cards, forecasts) is left to the primary."""
+    return live is not None and live.stats.phase == "standby"
+
+
 def start() -> asyncio.Task | None:
     """Create the singleton loop and its task (called from the FastAPI lifespan)."""
     global live

@@ -27,6 +27,7 @@ from statistics import NormalDist
 import pandas as pd
 import psycopg
 
+from app.config import get_settings
 from app.db import snowflake_sql as sf
 from app.db import tiger
 from app.deep.sync import BUCKET, BUCKET_MARGIN, VITALS_WM, naive_utc
@@ -206,10 +207,16 @@ class Detection:
 
 
 def run_detection(
-    sconn, start: datetime, end: datetime, input_start: datetime | None = None, metrics=tuple(MODELS)
+    sconn,
+    start: datetime,
+    end: datetime,
+    input_start: datetime | None = None,
+    metrics=tuple(MODELS),
+    concurrency: int | None = None,
 ) -> Detection:
     """Blocking: the five DETECT_ANOMALIES calls in parallel (the connector allows concurrent cursors) over
-    [input_start, end); only results for [start, end) are kept."""
+    [input_start, end); only results for [start, end) are kept. `concurrency` caps how many run at once (the live
+    loop on the shared warehouse leaves room for the interactive calls)."""
     det = Detection(start, end)
     input_start = min(input_start or start, start)
 
@@ -223,7 +230,7 @@ def run_detection(
         except Exception as exc:  # one model failing must not lose the others
             return metric, None, time.perf_counter() - t0, " ".join(str(exc).split())[:200]
 
-    with ThreadPoolExecutor(max_workers=len(metrics)) as pool:
+    with ThreadPoolExecutor(max_workers=max(1, min(len(metrics), concurrency or len(metrics)))) as pool:
         for metric, rows, secs, err in pool.map(one, metrics):
             det.seconds[metric] = round(secs, 2)
             if err is not None:
@@ -270,13 +277,31 @@ stats = DetectStats()
 
 
 async def detect_range(
-    tconn: psycopg.AsyncConnection, sconn, start: datetime, end: datetime, train_to: datetime
+    tconn: psycopg.AsyncConnection,
+    sconn,
+    start: datetime,
+    end: datetime,
+    train_to: datetime,
+    *,
+    concurrency: int | None = None,
+    warehouse: str | None = None,
 ) -> Detection:
     """Detect buckets in [start, end) for all residents (with CONTEXT lead-in, never before `train_to`), store
-    in Snowflake and mirror to Tiger ai_insights."""
+    in Snowflake and mirror to Tiger ai_insights. `warehouse`: run the detection calls there (the session switches
+    back after)."""
     t0 = time.perf_counter()
     stats.phase = "detecting"
-    det = await asyncio.to_thread(run_detection, sconn, start, end, max(train_to, start - CONTEXT))
+
+    def detect() -> Detection:
+        if not warehouse:
+            return run_detection(sconn, start, end, max(train_to, start - CONTEXT), concurrency=concurrency)
+        sf.query(sconn, f"USE WAREHOUSE {warehouse}", feature="anomaly.detect.warehouse")
+        try:
+            return run_detection(sconn, start, end, max(train_to, start - CONTEXT), concurrency=concurrency)
+        finally:
+            sf.query(sconn, f"USE WAREHOUSE {get_settings().snowflake_warehouse}", feature="anomaly.detect.warehouse")
+
+    det = await asyncio.to_thread(detect)
     await asyncio.to_thread(_store_snowflake, sconn, det)
     payloads = build_payloads(det.results)
     await tiger.delete_anomaly_insights(tconn, start, end)  # re-detection replaces, never duplicates, a bucket
@@ -328,7 +353,10 @@ async def detect_pending(tconn: psycopg.AsyncConnection, sconn) -> Detection | N
     start = max(start, end - MAX_PENDING, train_to)
     if start >= end:
         return None
-    det = await detect_range(tconn, sconn, start, end, train_to)
+    settings = get_settings()
+    own = settings.snowflake_detect_warehouse
+    det = await detect_range(tconn, sconn, start, end, train_to, warehouse=own,
+                             concurrency=None if own else settings.anomaly_detect_concurrency)  # fmt: skip
     if det.ok:
         await tiger.set_sync_state(tconn, ANOMALY_WM, end - BUCKET, len(det.results))
     return det

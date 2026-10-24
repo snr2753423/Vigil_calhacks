@@ -1,0 +1,22 @@
+# Vultr / any public server: layered on docker-compose.yml.
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# (scripts/deploy.sh runs this for you; see DEPLOY.md.)
+#
+# The one setting that changes between servers is DOMAIN in .env:
+#   DOMAIN=203.0.113.7.sslip.io      practice run: your server's IP + .sslip.io (no domain needed)
+#   DOMAIN=vigil.example.com         Cal Hacks: your real domain (an A record pointing at the server)
+# Caddy gets a real Let's Encrypt certificate for it on first start, so ports 80 and 443 must be open.
+# PUBLIC_URL (the iPhone QR code on /devices) follows DOMAIN, so the phone needs no tunnel.
+
+services:
+  backend:
+    environment:
+      PUBLIC_URL: https://${DOMAIN:?set DOMAIN in .env (e.g. 203.0.113.7.sslip.io), see DEPLOY.md}
+
+  caddy:
+    ports: !override
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      SITE_ADDRESS: ${DOMAIN:?set DOMAIN in .env (e.g. 203.0.113.7.sslip.io), see DEPLOY.md}
